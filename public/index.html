@@ -187,10 +187,11 @@
       }
 
       // Per-companion status derived from the plan.
-      function compStatus(gangName, node) {
-        const issue = (S.plan.issues || []).find((i) => i.gang === gangName && i.node === node);
+      function compStatus(g, node) {
+        const issue = (S.plan.issues || []).find((i) => i.gang === g.name && i.node === node);
         if (issue && issue.severity === "error") return { kind: "bad", text: "blocked", issue };
-        const adds = (S.plan.actions || []).filter((a) => a.gang === gangName && a.source === node);
+        // pending links for this companion: forward (companion->load) or LED-sync (load->companion)
+        const adds = (S.plan.actions || []).filter((a) => a.gang === g.name && (a.source === node || (a.source === g.load && a.target === node)));
         if (adds.length) return { kind: "warn", text: `${adds.length} link${adds.length > 1 ? "s" : ""} to add`, adds };
         if (issue) return { kind: "warn", text: issue.code.toLowerCase().replace(/_/g, " "), issue };
         return { kind: "good", text: "wired" };
@@ -207,13 +208,13 @@
           const load = nodeById(g.load);
           const comps = g.companions.map((c) => {
             const id = typeof c === "number" ? c : c.node;
-            const st = compStatus(g.name, id);
+            const st = compStatus(g, id);
             const n = nodeById(id);
             const lr = n?.isLongRange ? ` <span class="badge lr">LR</span>` : "";
             const fix = st.issue?.remediation ? `<div class="issue ${st.issue.severity === "warning" ? "warn" : ""}">${esc(st.issue.message)}<div class="fix">→ ${esc(st.issue.remediation)}</div></div>` : "";
             return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
           }).join("");
-          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ");
+          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ") + (g.ledSync ? ` <span class="chip good">LED sync</span>` : "");
           const staleForGang = (S.stale || []).filter((a) => a.gang === g.name);
           const staleNote = staleForGang.length
             ? `<div class="issue warn"><b>${staleForGang.length}</b> link(s) not in this setup — <b>Sync</b> will remove them:<div class="fix">${staleForGang.map((a) => `#${a.source} ${esc(nodeLabel(nodeById(a.source)))} — ${esc(a.capabilityTitle || "extra")}`).join("<br>")}</div></div>`
@@ -287,6 +288,8 @@
                 <div class="checks" style="margin-top:8px">${(S.capabilities || []).map(capRow).join("")}</div>
               </div>
             </div>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--ink)"><input type="checkbox" id="gLed" ${existing?.ledSync ? "checked" : ""} style="width:auto"/> Sync LED bars across this gang</label>
+            <div class="sub" style="margin-top:2px">Wires the load back to each companion so every LED bar tracks together.</div>
             <div class="issue warn" id="compat" style="display:none"></div>
           </div>
           <div class="modal-f">
@@ -359,6 +362,7 @@
           const capsArr = capOrder().filter((id) => caps.has(id));
           if (!name || !load || !companions.length || !capsArr.length) { toast("Need a name, load, ≥1 companion, ≥1 behavior"); return; }
           const gang = { name, load, companions };
+          if (m.querySelector("#gLed").checked) gang.ledSync = true;
           const match = (S.presets || []).find((p) => sameSet(p.capabilities, capsArr));
           if (match) gang.profile = match.id; else gang.capabilities = capsArr;
           const gangs = (S.topology.gangs || []).slice();

@@ -88,6 +88,16 @@ function groupsForCompanion(
   return res.groups;
 }
 
+/** The load's "level" (brightness) group + its current members — used for LED-sync links. */
+async function levelGroupOfLoad(read: ReturnType<typeof makeReader>, loadId: number) {
+  const groups = await read.groupsOf(loadId);
+  const gid = resolveGroups(groups, ["level"]).groups[0];
+  if (gid == null) return null;
+  const group = groups.find((g) => g.id === gid)!;
+  const current = (await read.assocOf(loadId))[gid] ?? [];
+  return { gid, group, current };
+}
+
 export async function computePlan(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
@@ -145,6 +155,22 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
         actions.push({ kind: "add", gang: gang.name, source: comp.node, group: gid, groupLabel: g.label, target: gang.load });
       }
     }
+
+    // LED sync: wire load -> each companion on the level group so all bars track together.
+    if (gang.ledSync) {
+      const ctx = await levelGroupOfLoad(read, gang.load);
+      if (!ctx) {
+        issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "NO_CAPABILITY", message: `#${gang.load} "${label(load)}" has no brightness group to broadcast for LED sync.` });
+      } else {
+        for (const comp of gang.companions) {
+          const src = byId.get(comp.node);
+          if (!src || src.isLongRange) continue;
+          if (isLinkedTo(ctx.current, comp.node)) { satisfied++; continue; }
+          if (ctx.current.length >= ctx.group.maxNodes) { issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "GROUP_FULL", message: `the load's brightness group is full (max ${ctx.group.maxNodes}) — can't add more LED-sync links` }); break; }
+          actions.push({ kind: "add", gang: gang.name, source: gang.load, group: ctx.gid, groupLabel: ctx.group.label, target: comp.node });
+        }
+      }
+    }
   }
   return { actions, issues, satisfied };
 }
@@ -171,6 +197,15 @@ export async function computeTeardown(adapter: AssociationTransport, topo: Topol
         if (stored) {
           actions.push({ kind: "remove", gang: gang.name, source: comp.node, group: gid, groupLabel: g.label, target: gang.load, targetEndpoint: stored.endpoint });
         }
+      }
+    }
+
+    // LED sync: remove the load -> companion level links too.
+    if (gang.ledSync) {
+      const ctx = await levelGroupOfLoad(read, gang.load);
+      if (ctx) for (const comp of gang.companions) {
+        const stored = ctx.current.find((t) => t.nodeId === comp.node && (t.endpoint ?? 0) === 0);
+        if (stored) actions.push({ kind: "remove", gang: gang.name, source: gang.load, group: ctx.gid, groupLabel: ctx.group.label, target: comp.node, targetEndpoint: stored.endpoint });
       }
     }
   }
@@ -202,6 +237,17 @@ export async function computeStale(adapter: AssociationTransport, topo: Topology
         if (stored) {
           actions.push({ kind: "remove", gang: gang.name, source: comp.node, group: gid, groupLabel: g.label, target: gang.load, targetEndpoint: stored.endpoint, capabilityTitle: groupBehavior(g) });
         }
+      }
+    }
+
+    // LED-sync stale: load -> companion level links that shouldn't exist (LED sync off, or a
+    // companion that's no longer in the gang). Only touches links to this gang's own companions.
+    const ctx = await levelGroupOfLoad(read, gang.load);
+    if (ctx) {
+      const wanted = gang.ledSync ? new Set(gang.companions.map((c) => c.node)) : new Set<number>();
+      for (const t of ctx.current) {
+        if (!gang.companions.some((c) => c.node === t.nodeId) || wanted.has(t.nodeId)) continue;
+        actions.push({ kind: "remove", gang: gang.name, source: gang.load, group: ctx.gid, groupLabel: ctx.group.label, target: t.nodeId, targetEndpoint: t.endpoint, capabilityTitle: groupBehavior(ctx.group) });
       }
     }
   }

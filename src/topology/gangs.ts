@@ -21,6 +21,8 @@ export interface GangSpec {
   controlGroups?: number[]; // explicit override for the whole gang
   capabilities?: CapabilityId[];
   profile?: string;
+  /** Also wire load→each companion on the level group so every LED bar tracks together. */
+  ledSync?: boolean;
 }
 
 export interface Topology {
@@ -41,7 +43,7 @@ export function loadTopology(path: string): Topology {
     const companions: CompanionSpec[] = (g.companions ?? []).map((c: any) =>
       typeof c === "number" ? { node: c } : { node: c.node, groups: c.groups, capabilities: c.capabilities, profile: c.profile },
     );
-    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile };
+    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile, ledSync: g.ledSync === true };
   });
   return { defaults, gangs };
 }
@@ -88,6 +90,7 @@ export function saveTopology(path: string, topo: Topology): void {
       if (g.profile) out.profile = g.profile;
       if (g.capabilities) out.capabilities = g.capabilities;
       if (g.controlGroups) out.controlGroups = g.controlGroups;
+      if (g.ledSync) out.ledSync = true;
       return out;
     }),
   };
