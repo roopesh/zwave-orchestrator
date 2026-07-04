@@ -3,8 +3,10 @@
 // MQTT) can be dropped in by implementing the same shape. Envelopes verified live against
 // zwave-js-server 3.9.0 / schema 49.
 
-import type { AssociationAddress, AssociationGroup, AssociationsByGroup, ZNode } from "../types.ts";
+import type { AssociationAddress, AssociationGroup, AssociationsByGroup, ConfigParam, ZNode } from "../types.ts";
 import { ZwaveClient } from "./client.ts";
+
+const CONFIGURATION_CC = 112;
 
 export interface AssociationTransport {
   getNodes(): Promise<ZNode[]>;
@@ -79,5 +81,44 @@ export class ZWaveAdapter implements AssociationTransport {
       group,
       associations: targets.map((t) => ({ nodeId: t.nodeId, endpoint: t.endpoint })),
     });
+  }
+
+  // --- Configuration parameters (Command Class 112) ---
+
+  /** Read every node's config parameters (label, current value, named options) from one state dump. */
+  async getConfigParams(): Promise<Record<number, ConfigParam[]>> {
+    const { nodes } = await this.client.startListening();
+    const out: Record<number, ConfigParam[]> = {};
+    for (const n of nodes) {
+      const params: ConfigParam[] = (n.values ?? [])
+        .filter((v: any) => v.commandClass === CONFIGURATION_CC && v.metadata && typeof v.property === "number" && v.propertyKey === undefined)
+        .map((v: any) => ({
+          param: v.property,
+          label: v.metadata.label ?? `Parameter ${v.property}`,
+          description: v.metadata.description,
+          value: v.value ?? null,
+          default: v.metadata.default,
+          min: v.metadata.min,
+          max: v.metadata.max,
+          unit: v.metadata.unit,
+          writeable: v.metadata.writeable !== false,
+          options: v.metadata.states
+            ? Object.entries(v.metadata.states).map(([k, l]) => ({ value: Number(k), label: String(l) })).sort((a, b) => a.value - b.value)
+            : undefined,
+        }))
+        .sort((a: ConfigParam, b: ConfigParam) => a.param - b.param);
+      out[n.nodeId] = params;
+    }
+    return out;
+  }
+
+  /** Set one config parameter. Returns the SetValueStatus (255/254 = success, 1 = working). */
+  async setConfigValue(nodeId: number, param: number, value: number): Promise<number> {
+    const res = await this.client.request("node.set_value", {
+      nodeId,
+      valueId: { commandClass: CONFIGURATION_CC, endpoint: 0, property: param },
+      value,
+    });
+    return res?.result?.status ?? -1;
   }
 }

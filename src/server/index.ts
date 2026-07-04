@@ -14,12 +14,15 @@ import { loadTopology, saveTopology, type Topology } from "../topology/gangs.ts"
 import { computePlan, computeStale, computeTeardown, type PlanAction } from "../topology/plan.ts";
 import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
+import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies.ts";
+import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import type { NodeDump } from "../types.ts";
 
 type UiNode = NodeDump & { supports: string[] };
 
 const PORT = Number(process.env.PORT ?? 8090);
 const GANGS_FILE = process.env.GANGS_FILE ?? "gangs.yaml";
+const POLICIES_FILE = process.env.POLICIES_FILE ?? "policies.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
 
 // Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
@@ -149,6 +152,9 @@ async function main(): Promise<void> {
       if (path === "/api/teardown" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "remove"));
       if (path === "/api/reconcile" && req.method === "POST") return void (await handleReconcile(hub, res, await readBody(req)));
       if (path === "/api/gangs" && req.method === "POST") return void (await handleSaveGangs(hub, res, await readBody(req)));
+      if (path === "/api/params" && req.method === "GET") return void (await handleParams(hub, res));
+      if (path === "/api/params/apply" && req.method === "POST") return void (await handleParamsApply(hub, res, await readBody(req)));
+      if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
       if (path.startsWith("/api/")) return void json(res, 404, { error: "unknown endpoint" });
@@ -196,6 +202,40 @@ async function handleReconcile(hub: Hub, res: ServerResponse, body: any): Promis
   const after = await computePlan(adapter, topology);
   const afterStale = await computeStale(adapter, topology);
   json(res, 200, { results: [...addResults, ...remResults], plan: after, stale: afterStale.actions });
+}
+
+async function handleParams(hub: Hub, res: ServerResponse): Promise<void> {
+  const adapter = await hub.ensure();
+  const [nodes, params] = [await adapter.getNodes(), await adapter.getConfigParams()];
+  const doc = loadPolicies(POLICIES_FILE);
+  const plan = await computeParamPlan(adapter, doc, params);
+  json(res, 200, {
+    nodes: nodes.map((n) => ({ id: n.id, name: n.name, location: n.location, model: n.product, isController: n.isController, isLongRange: n.isLongRange })),
+    params,
+    policies: doc.policies,
+    plan,
+  });
+}
+
+async function handleParamsApply(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const adapter = await hub.ensure();
+  const doc = loadPolicies(POLICIES_FILE);
+  const plan = await computeParamPlan(adapter, doc);
+  let actions: ParamAction[] = plan.actions;
+  if (body?.policy) actions = actions.filter((a) => a.policy.toLowerCase() === String(body.policy).toLowerCase());
+  if (body?.node != null) actions = actions.filter((a) => a.node === Number(body.node));
+  const results = await applyParamActions(adapter, actions);
+  const after = await computeParamPlan(adapter, doc);
+  json(res, 200, { results, plan: after });
+}
+
+async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const doc = body?.policies ? ({ policies: body.policies } as PolicyDoc) : null;
+  if (!doc) return void json(res, 400, { error: "expected { policies: [...] }" });
+  savePolicies(POLICIES_FILE, doc);
+  let plan: any = { actions: [], issues: [], satisfied: 0 };
+  if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc);
+  json(res, 200, { ok: true, policies: doc.policies, plan });
 }
 
 async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promise<void> {

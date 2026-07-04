@@ -36,6 +36,26 @@ export interface ZNode {
 /** Current associations of a node, keyed by group id. */
 export type AssociationsByGroup = Record<number, AssociationAddress[]>;
 
+/** A named option for a configuration parameter (e.g. {value:0, label:"Immediate"}). */
+export interface ConfigOption {
+  value: number;
+  label: string;
+}
+
+/** A device configuration parameter (Command Class 112) with metadata + current value. */
+export interface ConfigParam {
+  param: number;
+  label: string;
+  description?: string;
+  value: number | null;
+  default?: number;
+  min?: number;
+  max?: number;
+  unit?: string;
+  writeable: boolean;
+  options?: ConfigOption[];
+}
+
 /** A node enriched with its association groups + current associations (dump shape). */
 export interface NodeDump extends ZNode {
   groups: AssociationGroup[];

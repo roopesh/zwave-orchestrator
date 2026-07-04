@@ -6,4 +6,5 @@ dist
 *.log
 # Personal data — provided at runtime via env + a mounted /data volume
 gangs.yaml
+policies.yaml
 config/config.json
