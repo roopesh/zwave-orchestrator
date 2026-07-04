@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z-Wave Associations</title>
+    <style>
+      :root {
+        --bg: #0f1420; --panel: #171e2e; --panel2: #1e2740; --line: #2b3550;
+        --ink: #e7ecf5; --muted: #96a2bd; --accent: #5aa9ff; --good: #46c98b;
+        --warn: #e6b64c; --bad: #f2685f; --chip: #263149;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      a { color: var(--accent); }
+      header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+      header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+      .spacer { flex: 1; }
+      .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 3px rgba(242,104,95,.15); }
+      .dot.ok { background: var(--good); box-shadow: 0 0 0 3px rgba(70,201,139,.15); }
+      button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); border-radius: 8px; padding: 7px 12px; }
+      button:hover { border-color: var(--accent); }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+      button.ghost { background: transparent; }
+      button.sm { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
+      button.danger:hover { border-color: var(--bad); color: var(--bad); }
+      main { max-width: 1040px; margin: 0 auto; padding: 20px; }
+      .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .between { justify-content: space-between; }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 26px 0 12px; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+      .gang-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .gang-head .name { font-size: 15px; font-weight: 640; }
+      .load { color: var(--muted); }
+      .comp { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+      .comp:first-of-type { border-top: none; }
+      .comp .who { flex: 1; }
+      .sub { color: var(--muted); font-size: 12.5px; }
+      .chip { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); border: 1px solid var(--line); }
+      .chip.good { color: var(--good); border-color: rgba(70,201,139,.4); }
+      .chip.warn { color: var(--warn); border-color: rgba(230,182,76,.4); }
+      .chip.bad { color: var(--bad); border-color: rgba(242,104,95,.4); }
+      .issue { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: rgba(242,104,95,.08); border: 1px solid rgba(242,104,95,.3); font-size: 13px; }
+      .issue.warn { background: rgba(230,182,76,.08); border-color: rgba(230,182,76,.3); }
+      .issue .fix { color: var(--muted); margin-top: 4px; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+      th { color: var(--muted); font-weight: 600; }
+      .badge { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); }
+      .badge.lr { color: var(--warn); }
+      dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 0; width: min(560px, 92vw); }
+      dialog::backdrop { background: rgba(4,8,16,.6); }
+      .modal-h { padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 640; }
+      .modal-b { padding: 18px; max-height: 66vh; overflow: auto; }
+      .modal-f { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; }
+      label { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 5px; }
+      input, select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); font: inherit; }
+      .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+      .checks label { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--ink); font-size: 13px; }
+      .checks input { width: auto; }
+      .profile { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+      .profile.sel { border-color: var(--accent); background: rgba(90,169,255,.06); }
+      .profile .t { font-weight: 620; display: flex; align-items: center; gap: 8px; }
+      .profile .s { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+      .profile ul { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
+      .empty { color: var(--muted); padding: 20px; text-align: center; }
+      details summary { cursor: pointer; color: var(--muted); }
+      .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+      .toast.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Z-Wave Associations</h1>
+      <span class="sub" id="homeid"></span>
+      <div class="spacer"></div>
+      <div class="status"><span class="dot" id="dot"></span><span id="connText">connecting…</span></div>
+      <button class="ghost sm" id="btnRefresh">Refresh</button>
+      <button class="ghost sm" id="btnSettings">Settings</button>
+    </header>
+    <main>
+      <div class="row between">
+        <h2 style="margin:0">Gangs</h2>
+        <div class="row">
+          <button class="sm" id="btnApplyAll">Apply all</button>
+          <button class="primary sm" id="btnNewGang">+ New gang</button>
+        </div>
+      </div>
+      <div id="gangs"></div>
+
+      <h2>Nodes</h2>
+      <div class="card"><div id="nodes"></div></div>
+    </main>
+
+    <dialog id="gangModal"></dialog>
+    <dialog id="settingsModal"></dialog>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      let S = null; // latest /api/state
+
+      const nodeLabel = (n) => (n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.product || "#" + n.id}` : "?");
+      const nodeById = (id) => (S?.nodes || []).find((n) => n.id === id);
+
+      async function api(path, method = "GET", body) {
+        const r = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+        return r.json();
+      }
+      function toast(msg) {
+        const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+        clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
+      }
+
+      async function loadState() {
+        S = await api("/api/state");
+        render();
+      }
+
+      function render() {
+        renderConn();
+        renderGangs();
+        renderNodes();
+      }
+
+      function renderConn() {
+        const c = S.connection;
+        $("#dot").className = "dot" + (c.connected ? " ok" : "");
+        $("#connText").textContent = c.connected ? `connected · zwave-js ${c.version?.driverVersion || "?"}` : `not connected${c.error ? " · " + c.error : ""}`;
+        $("#homeid").textContent = c.version?.homeId ? "home " + c.version.homeId : "";
+      }
+
+      // Per-companion status derived from the plan.
+      function compStatus(gangName, node) {
+        const issue = (S.plan.issues || []).find((i) => i.gang === gangName && i.node === node);
+        if (issue && issue.severity === "error") return { kind: "bad", text: "blocked", issue };
+        const adds = (S.plan.actions || []).filter((a) => a.gang === gangName && a.source === node);
+        if (adds.length) return { kind: "warn", text: `${adds.length} link${adds.length > 1 ? "s" : ""} to add`, adds };
+        if (issue) return { kind: "warn", text: issue.code.toLowerCase().replace(/_/g, " "), issue };
+        return { kind: "good", text: "wired" };
+      }
+
+      function renderGangs() {
+        const el = $("#gangs");
+        const gangs = S.topology.gangs || [];
+        if (!gangs.length) {
+          el.innerHTML = `<div class="card empty">No gangs yet. Click <b>+ New gang</b> to group a load switch with its companions.</div>`;
+          return;
+        }
+        el.innerHTML = gangs.map((g) => {
+          const load = nodeById(g.load);
+          const comps = g.companions.map((c) => {
+            const id = typeof c === "number" ? c : c.node;
+            const st = compStatus(g.name, id);
+            const n = nodeById(id);
+            const lr = n?.isLongRange ? ` <span class="badge lr">LR</span>` : "";
+            const fix = st.issue?.remediation ? `<div class="issue ${st.issue.severity === "warning" ? "warn" : ""}">${esc(st.issue.message)}<div class="fix">→ ${esc(st.issue.remediation)}</div></div>` : "";
+            return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
+          }).join("");
+          const groups = (g.controlGroups || S.topology.defaults.controlGroups || []).join(" + ");
+          return `<div class="card">
+            <div class="gang-head">
+              <span class="name">${esc(g.name)}</span>
+              <span class="load">→ load #${g.load} ${esc(nodeLabel(load))}</span>
+              <div class="spacer" style="flex:1"></div>
+              <button class="sm" data-edit="${esc(g.name)}">Edit</button>
+              <button class="sm" data-apply="${esc(g.name)}">Apply</button>
+              <button class="sm ghost" data-teardown="${esc(g.name)}">Teardown</button>
+            </div>
+            <div class="sub" style="margin-bottom:6px">Groups: ${groups}</div>
+            ${comps}
+          </div>`;
+        }).join("");
+      }
+
+      function renderNodes() {
+        const rows = (S.nodes || []).map((n) => `<tr>
+          <td>#${n.id}</td><td>${esc(n.location || "")}</td><td>${esc(n.name || "")}</td>
+          <td class="sub">${esc(n.product || "")}</td>
+          <td>${n.isController ? '<span class="badge">controller</span>' : ""}${n.isLongRange ? ' <span class="badge lr">Long Range</span>' : ""}</td>
+        </tr>`).join("");
+        $("#nodes").innerHTML = `<table><thead><tr><th>ID</th><th>Location</th><th>Name</th><th>Product</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+      }
+
+      const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+      // ---- writes ----
+      async function doWrite(kind, filter) {
+        toast(kind === "add" ? "Applying…" : "Removing…");
+        const r = await api(kind === "add" ? "/api/apply" : "/api/teardown", "POST", filter || {});
+        const failed = (r.results || []).filter((x) => !x.ok).length;
+        toast(`${(r.results || []).length - failed} ${kind === "add" ? "added" : "removed"}${failed ? ", " + failed + " failed" : ""}`);
+        await loadState();
+      }
+
+      // ---- gang editor ----
+      function openGangModal(existing) {
+        const nodes = (S.nodes || []).filter((n) => !n.isController);
+        const g = existing || { name: "", load: nodes[0]?.id, companions: [], controlGroups: S.topology.defaults.controlGroups.slice() };
+        const compIds = (g.companions || []).map((c) => (typeof c === "number" ? c : c.node));
+        const sel = new Set(g.controlGroups || S.topology.defaults.controlGroups);
+        const profiles = S.profiles || [];
+        let chosenProfile = profiles.find((p) => p.groups.join() === [...sel].sort().join())?.id || "custom";
+
+        const opt = (n) => `<option value="${n.id}" ${n.id === g.load ? "selected" : ""}>#${n.id} ${esc(nodeLabel(n))}</option>`;
+        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${compIds.includes(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (LR)" : ""}</label>`;
+        const profRow = (p) => `<div class="profile ${p.id === chosenProfile ? "sel" : ""}" data-profile="${p.id}" data-groups="${p.groups.join(',')}">
+            <div class="t"><input type="radio" name="prof" ${p.id === chosenProfile ? "checked" : ""}/> ${esc(p.label)} <span class="sub">(groups ${p.groups.join("+")})</span>${p.recommended ? ' <span class="chip good">recommended</span>' : ""}</div>
+            <div class="s">${esc(p.summary)}</div>
+            <ul>${p.pros.map((x) => `<li>${esc(x)}</li>`).join("")}${p.cons.map((x) => `<li>⚠ ${esc(x)}</li>`).join("")}</ul>
+          </div>`;
+        const customGroups = (S.groupInfo || []).map((gi) => `<label><input type="checkbox" data-cg value="${gi.group}" ${sel.has(gi.group) ? "checked" : ""}/> g${gi.group} ${esc(gi.label)}</label>`).join("");
+
+        const m = $("#gangModal");
+        m.innerHTML = `<form method="dialog">
+          <div class="modal-h">${existing ? "Edit gang" : "New gang"}</div>
+          <div class="modal-b">
+            <label>Gang name</label><input id="gName" value="${esc(g.name)}" placeholder="e.g. Kitchen Ceiling" />
+            <label>Load switch (the one wired to the fixture)</label>
+            <select id="gLoad">${nodes.map(opt).join("")}</select>
+            <label>Companions (remotes that should control the load)</label>
+            <div class="checks" id="gComps">${nodes.map(compRow).join("")}</div>
+            <label>What should companions send? (group profile)</label>
+            <div id="gProfiles">${profiles.map(profRow).join("")}
+              <div class="profile ${chosenProfile === "custom" ? "sel" : ""}" data-profile="custom">
+                <div class="t"><input type="radio" name="prof" ${chosenProfile === "custom" ? "checked" : ""}/> Custom</div>
+                <div class="checks" id="gCustom" style="margin-top:8px">${customGroups}</div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-f">
+            ${existing ? '<button class="ghost danger" id="gDelete" value="delete">Delete</button>' : ""}
+            <div class="spacer" style="flex:1"></div>
+            <button class="ghost" value="cancel">Cancel</button>
+            <button class="primary" id="gSave" value="save">Save</button>
+          </div>
+        </form>`;
+
+        // profile selection toggles
+        m.querySelectorAll("[data-profile]").forEach((el) => el.addEventListener("click", (e) => {
+          if (e.target.closest("#gCustom")) return;
+          m.querySelectorAll(".profile").forEach((p) => p.classList.remove("sel"));
+          el.classList.add("sel");
+          el.querySelector('input[type=radio]').checked = true;
+          const groups = el.getAttribute("data-groups");
+          if (groups) {
+            const set = new Set(groups.split(",").map(Number));
+            m.querySelectorAll("[data-cg]").forEach((c) => (c.checked = set.has(Number(c.value))));
+          }
+        }));
+
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue === "cancel" || !m.returnValue) return;
+          if (m.returnValue === "delete") { await saveGangs((S.topology.gangs || []).filter((x) => x.name !== existing.name)); return; }
+          const name = m.querySelector("#gName").value.trim();
+          const load = Number(m.querySelector("#gLoad").value);
+          const companions = [...m.querySelectorAll("[data-comp]:checked")].map((c) => Number(c.value)).filter((id) => id !== load);
+          const controlGroups = [...m.querySelectorAll("[data-cg]:checked")].map((c) => Number(c.value)).sort((a, b) => a - b);
+          if (!name || !load || !companions.length || !controlGroups.length) { toast("Name, load, ≥1 companion, ≥1 group required"); return; }
+          const gang = { name, load, companions, controlGroups };
+          const gangs = (S.topology.gangs || []).slice();
+          const idx = existing ? gangs.findIndex((x) => x.name === existing.name) : -1;
+          if (idx >= 0) gangs[idx] = gang; else gangs.push(gang);
+          await saveGangs(gangs);
+        });
+        m.showModal();
+      }
+
+      async function saveGangs(gangs) {
+        const topology = { defaults: S.topology.defaults, gangs };
+        await api("/api/gangs", "POST", { topology });
+        toast("Saved gangs.yaml");
+        await loadState();
+      }
+
+      // ---- settings ----
+      function openSettings() {
+        const c = S.connection;
+        const url = new URL(c.url);
+        const m = $("#settingsModal");
+        m.innerHTML = `<form method="dialog">
+          <div class="modal-h">zwave-js-server connection</div>
+          <div class="modal-b">
+            <label>Host</label><input id="sHost" value="${esc(url.hostname)}" />
+            <label>Port (the add-on's "Z-Wave JS server port", default 3000)</label><input id="sPort" value="${esc(url.port || "3000")}" />
+            <p class="sub">Saved to config/config.json; the server reconnects on save.</p>
+          </div>
+          <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save & connect</button></div>
+        </form>`;
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue !== "save") return;
+          const host = m.querySelector("#sHost").value.trim();
+          const port = Number(m.querySelector("#sPort").value);
+          const r = await api("/api/config", "POST", { host, port });
+          toast(r.connected ? "Connected ✓" : "Could not connect: " + (r.error || "?"));
+          await loadState();
+        });
+        m.showModal();
+      }
+
+      // ---- events ----
+      $("#btnRefresh").onclick = loadState;
+      $("#btnSettings").onclick = openSettings;
+      $("#btnNewGang").onclick = () => openGangModal(null);
+      $("#btnApplyAll").onclick = () => doWrite("add", {});
+      $("#gangs").addEventListener("click", (e) => {
+        const t = e.target.closest("button"); if (!t) return;
+        if (t.dataset.apply) doWrite("add", { gang: t.dataset.apply });
+        else if (t.dataset.teardown) doWrite("remove", { gang: t.dataset.teardown });
+        else if (t.dataset.edit) openGangModal((S.topology.gangs || []).find((g) => g.name === t.dataset.edit));
+      });
+
+      loadState();
+    </script>
+  </body>
+</html>

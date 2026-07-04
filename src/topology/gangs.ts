@@ -1,8 +1,8 @@
 // Load and normalize the declarative topology (gangs.yaml) — the source of truth.
 // A companion may be a bare node id, or an object with a per-companion group override.
 
-import { readFileSync } from "node:fs";
-import { parse } from "yaml";
+import { readFileSync, writeFileSync } from "node:fs";
+import { parse, stringify } from "yaml";
 
 export interface CompanionSpec {
   node: number;
@@ -50,4 +50,20 @@ export function loadTopology(path: string): Topology {
 /** Resolve the control groups for a companion: per-companion > per-gang > defaults. */
 export function controlGroupsFor(topo: Topology, gang: GangSpec, comp: CompanionSpec): number[] {
   return comp.groups ?? gang.controlGroups ?? topo.defaults.controlGroups;
+}
+
+const SAVE_HEADER = "# Managed by zwave-associations (editable by hand or via the web UI).\n\n";
+
+/** Persist the topology back to disk, collapsing bare companions to plain node ids. */
+export function saveTopology(path: string, topo: Topology): void {
+  const doc = {
+    defaults: topo.defaults,
+    gangs: topo.gangs.map((g) => ({
+      name: g.name,
+      load: g.load,
+      companions: g.companions.map((c) => (c.groups ? { node: c.node, groups: c.groups } : c.node)),
+      ...(g.controlGroups ? { controlGroups: g.controlGroups } : {}),
+    })),
+  };
+  writeFileSync(path, SAVE_HEADER + stringify(doc));
 }

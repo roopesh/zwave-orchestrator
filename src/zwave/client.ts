@@ -20,6 +20,9 @@ export class ZwaveClient {
   readonly url: string;
   version?: VersionInfo;
   schemaVersion = 0;
+  open = false;
+  /** Invoked when the socket closes (unexpected or otherwise) — used by the server to reconnect. */
+  onClose?: () => void;
 
   private ws?: WebSocket;
   private msgId = 0;
@@ -44,9 +47,14 @@ export class ZwaveClient {
       ws.addEventListener("error", (ev: any) => {
         reject(new Error(`WebSocket error for ${this.url}: ${ev?.message ?? ev?.error ?? "connection failed"}`));
       });
+      ws.addEventListener("open", () => {
+        this.open = true;
+      });
       ws.addEventListener("close", () => {
+        this.open = false;
         for (const [, p] of this.pending) p.reject(new Error("connection closed"));
         this.pending.clear();
+        this.onClose?.();
       });
       ws.addEventListener("message", (ev: any) => {
         const raw = typeof ev.data === "string" ? ev.data : String(ev.data);

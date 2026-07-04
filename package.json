@@ -13,6 +13,8 @@
     "dump": "node src/cli.ts dump",
     "plan": "node src/cli.ts plan",
     "apply": "node src/cli.ts apply",
+    "serve": "node src/server/index.ts",
+    "start": "node src/server/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
