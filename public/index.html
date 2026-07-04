@@ -68,6 +68,14 @@
       details summary { cursor: pointer; color: var(--muted); }
       .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; }
       .toast.show { opacity: 1; }
+      .tabs { display: flex; gap: 2px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+      .tab { background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 10px 16px; color: var(--muted); font-weight: 600; }
+      .tab:hover { color: var(--ink); }
+      .tab.active { color: var(--ink); border-bottom-color: var(--accent); }
+      td.diff { color: var(--warn); font-weight: 600; }
+      .setline { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; }
+      .setline select { flex: 1; }
+      .setline button { padding: 4px 9px; }
     </style>
   </head>
   <body>
@@ -81,20 +89,42 @@
     </header>
     <main>
       <div id="banner"></div>
-      <div class="row between">
-        <h2 style="margin:0">Gangs</h2>
-        <div class="row">
-          <button class="sm" id="btnSyncAll" title="Add missing links and remove any not in your setup">Sync all</button>
-          <button class="primary sm" id="btnNewGang">+ New gang</button>
-        </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="assoc">Associations</button>
+        <button class="tab" data-tab="params">Parameters</button>
       </div>
-      <div id="gangs"></div>
 
-      <h2>Nodes</h2>
-      <div class="card"><div id="nodes"></div></div>
+      <div id="tabAssoc" class="tabpane">
+        <div class="row between">
+          <h2 style="margin:0">Gangs</h2>
+          <div class="row">
+            <button class="sm" id="btnSyncAll" title="Add missing links and remove any not in your setup">Sync all</button>
+            <button class="primary sm" id="btnNewGang">+ New gang</button>
+          </div>
+        </div>
+        <div id="gangs"></div>
+
+        <h2>Nodes</h2>
+        <div class="card"><div id="nodes"></div></div>
+      </div>
+
+      <div id="tabParams" class="tabpane" hidden>
+        <div class="row between">
+          <h2 style="margin:0">Policies</h2>
+          <div class="row">
+            <button class="sm" id="btnSyncAllParams" title="Apply every policy's settings to its devices">Sync all</button>
+            <button class="primary sm" id="btnNewPolicy">+ New policy</button>
+          </div>
+        </div>
+        <div id="policies"></div>
+
+        <h2>Where devices differ</h2>
+        <div class="card"><div id="paramBrowse"></div></div>
+      </div>
     </main>
 
     <dialog id="gangModal"></dialog>
+    <dialog id="policyModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -370,8 +400,157 @@
         m.showModal();
       }
 
+      // ---- parameters tab ----
+      let P = null; // latest /api/params
+
+      const pNode = (id) => (P?.nodes || []).find((n) => n.id === id);
+      const pLabel = (n) => (n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.model || "#" + n.id}` : "?");
+      const pShort = (id) => pLabel(pNode(id));
+      const paramDefAny = (param, prefer) => {
+        for (const id of prefer || []) { const p = (P.params[id] || []).find((x) => x.param === param); if (p) return p; }
+        for (const n of P.nodes || []) { const p = (P.params[n.id] || []).find((x) => x.param === param); if (p) return p; }
+        return null;
+      };
+      const valueLabel = (def, v) => { if (v == null) return "?"; const o = def?.options?.find((x) => x.value === v); return o ? o.label : String(v); };
+
+      async function loadParams() { P = await api("/api/params"); renderParams(); }
+      function renderParams() { renderPolicies(); renderParamBrowse(); }
+
+      function renderPolicies() {
+        const el = $("#policies");
+        const pols = P.policies || [];
+        if (!pols.length) { el.innerHTML = `<div class="card empty">No policies yet. Click <b>+ New policy</b> to define parameter values and push them to your switches.</div>`; return; }
+        el.innerHTML = pols.map((pol) => {
+          const acts = (P.plan.actions || []).filter((a) => a.policy === pol.name);
+          const issues = (P.plan.issues || []).filter((i) => i.policy === pol.name);
+          const settings = pol.settings.map((s) => { const def = paramDefAny(s.param, pol.targets); return `<span class="chip">${esc(def ? def.label : "p" + s.param)}: ${esc(valueLabel(def, s.value))}</span>`; }).join(" ");
+          const targets = pol.targets.map((id) => `#${id} ${esc(pShort(id))}`).join(", ");
+          const drift = acts.length
+            ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
+            : `<div class="sub" style="margin-top:6px">✓ all target devices in sync</div>`;
+          const na = issues.length ? `<div class="sub" style="margin-top:6px">${issues.map((i) => esc(i.message)).join("<br>")}</div>` : "";
+          return `<div class="card">
+            <div class="gang-head"><span class="name">${esc(pol.name)}</span><div class="spacer" style="flex:1"></div>
+              <button class="sm" data-pedit="${esc(pol.name)}">Edit</button>
+              <button class="sm primary" data-psync="${esc(pol.name)}">Sync</button></div>
+            <div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Settings:</span> ${settings}</div>
+            <div class="sub">Devices: ${targets}</div>
+            ${drift}${na}
+          </div>`;
+        }).join("");
+      }
+
+      function renderParamBrowse() {
+        const el = $("#paramBrowse");
+        const nodes = (P.nodes || []).filter((n) => !n.isController && (P.params[n.id] || []).length);
+        const byModel = {};
+        nodes.forEach((n) => (byModel[n.model] = byModel[n.model] || []).push(n));
+        let html = "";
+        for (const [model, ns] of Object.entries(byModel)) {
+          const nums = new Set(); ns.forEach((n) => (P.params[n.id] || []).forEach((p) => nums.add(p.param)));
+          const rows = [];
+          for (const num of [...nums].sort((a, b) => a - b)) {
+            const defs = ns.map((n) => (P.params[n.id] || []).find((x) => x.param === num));
+            const def = defs.find(Boolean);
+            if (!def || def.writeable === false) continue; // skip read-only diagnostics (e.g. Internal Temperature)
+            const distinct = new Set(defs.map((p) => (p ? p.value : "?")));
+            if (distinct.size <= 1) continue;
+            const cells = defs.map((p) => `<td class="diff">${p ? esc(valueLabel(def, p.value)) : "—"}</td>`).join("");
+            rows.push(`<tr><td>${esc(def.label)}</td>${cells}</tr>`);
+          }
+          const head = ns.map((n) => `<th>#${n.id}<br><span class="sub">${esc(n.location || "")}</span></th>`).join("");
+          html += rows.length
+            ? `<div class="sub" style="margin:10px 0 4px"><b>${esc(model)}</b> (${ns.length})</div><div style="overflow-x:auto"><table><thead><tr><th>Parameter</th>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
+            : `<div class="sub" style="margin:10px 0 4px"><b>${esc(model)}</b> (${ns.length}) — all settings in sync ✓</div>`;
+        }
+        el.innerHTML = html || `<div class="empty sub">No devices with parameters.</div>`;
+      }
+
+      async function savePolicies(policies) { await api("/api/policies", "POST", { policies }); toast("Saved policies.yaml"); await loadParams(); }
+      async function doParamSync(filter) {
+        toast("Syncing…");
+        const r = await api("/api/params/apply", "POST", filter || {});
+        const failed = (r.results || []).filter((x) => !x.ok).length;
+        toast(`${(r.results || []).length - failed} change(s)${failed ? ", " + failed + " failed" : ""}`);
+        await loadParams();
+      }
+
+      function openPolicyModal(existing) {
+        const nodes = (P.nodes || []).filter((n) => !n.isController);
+        const targets = new Set(existing ? existing.targets : []);
+        const settings = existing ? existing.settings.map((s) => ({ param: s.param, value: s.value })) : [];
+        const m = $("#policyModal");
+        const availableParams = () => {
+          const map = new Map();
+          for (const id of targets) for (const p of P.params[id] || []) if (p.writeable && !map.has(p.param)) map.set(p.param, p);
+          return [...map.values()].sort((a, b) => a.param - b.param);
+        };
+
+        m.innerHTML = `<form method="dialog">
+          <div class="modal-h">${existing ? "Edit policy" : "New policy"}</div>
+          <div class="modal-b">
+            <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : ""}" placeholder="e.g. Inovelli defaults" />
+            <label>Apply to devices</label>
+            <div class="checks" id="pTargets">${nodes.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div>
+            <label>Settings (pick a parameter and the value you want)</label>
+            <div id="pSettings"></div>
+            <button type="button" class="sm" id="pAdd">+ Add setting</button>
+            <div class="issue warn" id="pNote" style="display:none; margin-top:12px"></div>
+          </div>
+          <div class="modal-f">
+            ${existing ? '<button class="ghost danger" value="delete">Delete</button>' : ""}
+            <div class="spacer" style="flex:1"></div>
+            <button class="ghost" value="cancel">Cancel</button>
+            <button class="primary" value="save">Save</button>
+          </div>
+        </form>`;
+
+        const valueControl = (i) => {
+          const s = settings[i], def = paramDefAny(s.param, [...targets]);
+          if (def?.options?.length) return `<select data-val="${i}">${def.options.map((o) => `<option value="${o.value}" ${o.value === s.value ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
+          return `<input type="number" data-val="${i}" value="${s.value}" ${def?.min != null ? `min="${def.min}"` : ""} ${def?.max != null ? `max="${def.max}"` : ""} style="max-width:130px"/>${def?.unit ? " " + esc(def.unit) : ""}`;
+        };
+        function paintSettings() {
+          const avail = availableParams();
+          const box = m.querySelector("#pSettings");
+          box.innerHTML = settings.map((s, i) => {
+            const inList = avail.some((p) => p.param === s.param);
+            const extra = inList ? "" : `<option value="${s.param}" selected>p${s.param} (no selected device has it)</option>`;
+            const opts = avail.map((p) => `<option value="${p.param}" ${p.param === s.param ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+            return `<div class="setline"><select data-param="${i}">${extra}${opts}</select> = ${valueControl(i)} <button type="button" class="ghost" data-del="${i}">✕</button></div>`;
+          }).join("") || `<div class="sub" style="margin-bottom:7px">No settings yet — add one.</div>`;
+          box.querySelectorAll("[data-param]").forEach((sel) => sel.addEventListener("change", () => { const i = Number(sel.dataset.param); settings[i].param = Number(sel.value); const def = paramDefAny(settings[i].param, [...targets]); settings[i].value = def?.default ?? def?.options?.[0]?.value ?? 0; paintSettings(); updateNote(); }));
+          box.querySelectorAll("[data-val]").forEach((inp) => inp.addEventListener("change", () => { settings[Number(inp.dataset.val)].value = Number(inp.value); updateNote(); }));
+          box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); }));
+        }
+        function updateNote() {
+          const msgs = [];
+          for (const s of settings) { const lack = [...targets].filter((id) => !(P.params[id] || []).some((p) => p.param === s.param)); if (lack.length) { const def = paramDefAny(s.param, [...targets]); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); } }
+          const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
+        }
+
+        paintSettings(); updateNote();
+        m.querySelectorAll("[data-tgt]").forEach((c) => c.addEventListener("change", () => { c.checked ? targets.add(Number(c.value)) : targets.delete(Number(c.value)); paintSettings(); updateNote(); }));
+        m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; settings.push({ param: a ? a.param : 1, value: a ? (a.default ?? a.options?.[0]?.value ?? 0) : 0 }); paintSettings(); updateNote(); });
+
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue === "cancel" || !m.returnValue) return;
+          if (m.returnValue === "delete") { await savePolicies((P.policies || []).filter((x) => x.name !== existing.name)); return; }
+          const name = m.querySelector("#pName").value.trim();
+          const tgts = [...targets];
+          if (!name || !tgts.length || !settings.length) { toast("Need a name, ≥1 device, ≥1 setting"); return; }
+          const policy = { name, targets: tgts, settings: settings.map((s) => ({ param: s.param, value: s.value })) };
+          const pols = (P.policies || []).slice();
+          const idx = existing ? pols.findIndex((x) => x.name === existing.name) : -1;
+          if (idx >= 0) pols[idx] = policy; else pols.push(policy);
+          await savePolicies(pols);
+        });
+        m.showModal();
+      }
+
       // ---- events ----
-      $("#btnRefresh").onclick = loadState;
+      $("#btnRefresh").onclick = async () => { await loadState(); if (P) await loadParams(); };
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
       $("#btnSyncAll").onclick = () => doWrite("sync", {});
@@ -380,6 +559,21 @@
         if (t.dataset.sync) doWrite("sync", { gang: t.dataset.sync });
         else if (t.dataset.teardown) doWrite("remove", { gang: t.dataset.teardown });
         else if (t.dataset.edit) openGangModal((S.topology.gangs || []).find((g) => g.name === t.dataset.edit));
+      });
+
+      document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+        document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+        const tab = t.dataset.tab;
+        $("#tabAssoc").hidden = tab !== "assoc";
+        $("#tabParams").hidden = tab !== "params";
+        if (tab === "params" && !P) loadParams();
+      });
+      $("#btnNewPolicy").onclick = () => openPolicyModal(null);
+      $("#btnSyncAllParams").onclick = () => doParamSync({});
+      $("#policies").addEventListener("click", (e) => {
+        const t = e.target.closest("button"); if (!t) return;
+        if (t.dataset.psync) doParamSync({ policy: t.dataset.psync });
+        else if (t.dataset.pedit) openPolicyModal((P.policies || []).find((p) => p.name === t.dataset.pedit));
       });
 
       loadState();
