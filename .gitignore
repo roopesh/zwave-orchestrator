@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+# Local connection config (host/port/token) — keep out of the repo
+config/config.json
+# Editor / tooling local settings
+.claude/settings.local.json

@@ -1,0 +1,25 @@
+{
+  "name": "zwave-associations",
+  "version": "0.1.0",
+  "description": "Declarative association manager for Z-Wave companion / 3-way switches, driven by the zwave-js-server API.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "zwave-assoc": "src/cli.ts"
+  },
+  "scripts": {
+    "dump": "node src/cli.ts dump",
+    "plan": "node src/cli.ts plan",
+    "apply": "node src/cli.ts apply",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
+  }
+}

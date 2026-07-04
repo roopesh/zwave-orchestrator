@@ -1,0 +1,15 @@
+# My companion-switch topology. See gangs.example.yaml for the annotated template.
+
+defaults:
+  # Full companion: 2 = Basic Set (tap on/off), 3 = Multilevel Switch Set (level tracks),
+  # 4 = Multilevel Switch Start/Stop (hold to dim).
+  controlGroups: [2, 3, 4]
+
+gangs:
+  - name: Kitchen Ceiling
+    load: 2 # [Kitchen] Ceiling Lights
+    companions: [3, 4] # Family Room + Garage Entry remotes
+
+  - name: Kitchen Counter
+    load: 6 # [Kitchen] Counter Lights
+    companions: [5, 256] # 256 is on Long Range — planner flags it as ineligible

@@ -1,0 +1,23 @@
+# Declarative companion-switch topology — "associations-as-code".
+#
+# A *gang* is one load switch plus the companion/remote switches that should operate it
+# directly over Z-Wave (no Home Assistant round-trip). The tool derives the association
+# mesh from this file, diffs it against the controller's live state, and reconciles.
+#
+# This file is the durable source of truth: it survives a controller rebuild or re-pair.
+# Copy to gangs.yaml and edit for your home.
+
+defaults:
+  # The association group used on each companion to reach the load switch.
+  # Inovelli VZW dimmers: group 3 = "Multilevel Switch Set" (dim + on/off follow).
+  # Override per-gang or per-companion when a model differs.
+  controlGroup: 3
+
+gangs:
+  - name: Kitchen Ceiling
+    load: 2 # [Kitchen] Ceiling Lights
+    companions: [3, 4] # Family Room remote, Garage Entry remote
+
+  - name: Kitchen Counter
+    load: 6 # [Kitchen] Counter Lights
+    companions: [5, 256] # Garage Entry remote, Family Room remote
