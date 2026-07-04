@@ -80,6 +80,7 @@
       <button class="ghost sm" id="btnSettings">Settings</button>
     </header>
     <main>
+      <div id="banner"></div>
       <div class="row between">
         <h2 style="margin:0">Gangs</h2>
         <div class="row">
@@ -129,8 +130,21 @@
 
       function render() {
         renderConn();
+        renderBanner();
         renderGangs();
         renderNodes();
+      }
+
+      function renderBanner() {
+        const b = $("#banner");
+        if (S.connection.connected) { b.innerHTML = ""; return; }
+        b.innerHTML = `<div class="card">
+          <b>Not connected to zwave-js-server.</b> <span class="sub">${esc(S.connection.error || "")}</span>
+          <div class="sub" style="margin:8px 0 12px">Set your Home Assistant host and the add-on's “Z-Wave JS server port” (default 3000). Enable that port under the add-on's Configuration → Network, then restart it.</div>
+          <button class="primary sm" id="btnConnect">Open Settings</button>
+        </div>`;
+        const btn = document.getElementById("btnConnect");
+        if (btn) btn.onclick = openSettings;
       }
 
       function renderConn() {
@@ -214,10 +228,11 @@
         const nodes = (S.nodes || []).filter((n) => !n.isController);
         const g = existing || { name: "", load: nodes[0]?.id, companions: [] };
         const compIds = (g.companions || []).map((c) => (typeof c === "number" ? c : c.node));
+        const checked = new Set(compIds);
         const caps = new Set(existing ? effCaps(g) : preset("full")?.capabilities || ["onoff", "level", "dim"]);
 
         const opt = (n) => `<option value="${n.id}" ${n.id === g.load ? "selected" : ""}>#${n.id} ${esc(nodeLabel(n))}</option>`;
-        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${compIds.includes(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (Long Range)" : ""}</label>`;
+        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${checked.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (Long Range)" : ""}</label>`;
         const presetRow = (p) => `<div class="profile" data-preset="${p.id}" data-caps="${p.capabilities.join(',')}">
             <div class="t"><input type="radio" name="prof"/> ${esc(p.label)}${p.recommended ? ' <span class="chip good">recommended</span>' : ""}</div>
             <div class="s">${esc(p.summary)}</div>
@@ -232,7 +247,7 @@
             <label>Load switch (the one wired to the fixture)</label>
             <select id="gLoad">${nodes.map(opt).join("")}</select>
             <label>Companions (remotes that should control the load)</label>
-            <div class="checks" id="gComps">${nodes.map(compRow).join("")}</div>
+            <div class="checks" id="gComps"></div>
             <label>What should the companions do?</label>
             <div id="gPresets">${(S.presets || []).map(presetRow).join("")}
               <div class="profile" data-preset="custom">
@@ -251,8 +266,20 @@
         </form>`;
 
         const capBoxes = () => [...m.querySelectorAll("[data-cap]")];
-        const checkedComps = () => [...m.querySelectorAll("[data-comp]:checked")].map((c) => Number(c.value));
+        const checkedComps = () => [...checked].filter((id) => id !== Number(m.querySelector("#gLoad").value) && nodes.some((n) => n.id === id));
         const syncCapBoxes = () => capBoxes().forEach((b) => (b.checked = caps.has(b.value)));
+
+        // Companion checklist excludes the currently-selected load; repaints when the load changes.
+        function paintComps() {
+          const load = Number(m.querySelector("#gLoad").value);
+          checked.delete(load);
+          const box = m.querySelector("#gComps");
+          box.innerHTML = nodes.filter((n) => n.id !== load).map(compRow).join("");
+          box.querySelectorAll("[data-comp]").forEach((c) => c.addEventListener("change", () => {
+            c.checked ? checked.add(Number(c.value)) : checked.delete(Number(c.value));
+            recompute();
+          }));
+        }
 
         function recompute() {
           const arr = capOrder().filter((id) => caps.has(id));
@@ -279,7 +306,9 @@
         }
 
         syncCapBoxes();
+        paintComps();
         recompute();
+        m.querySelector("#gLoad").addEventListener("change", () => { paintComps(); recompute(); });
         m.querySelectorAll("[data-preset]").forEach((el) => el.addEventListener("click", (e) => {
           if (e.target.closest("[data-cap]")) return;
           const ca = el.getAttribute("data-caps");
@@ -287,7 +316,6 @@
           recompute();
         }));
         capBoxes().forEach((b) => b.addEventListener("change", () => { b.checked ? caps.add(b.value) : caps.delete(b.value); recompute(); }));
-        m.querySelectorAll("[data-comp]").forEach((c) => c.addEventListener("change", recompute));
 
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
