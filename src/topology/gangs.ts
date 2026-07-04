@@ -81,11 +81,14 @@ export function saveTopology(path: string, topo: Topology): void {
       const out: Record<string, unknown> = {
         name: g.name,
         load: g.load,
-        companions: g.companions.map((c) =>
-          c.groups || c.capabilities || c.profile
-            ? { node: c.node, ...(c.groups ? { groups: c.groups } : {}), ...(c.capabilities ? { capabilities: c.capabilities } : {}), ...(c.profile ? { profile: c.profile } : {}) }
-            : c.node,
-        ),
+        // Companions may arrive as raw node ids (from the UI) or CompanionSpec objects (from a
+        // loaded file) — normalize both, and only expand to an object when there are overrides.
+        companions: g.companions.map((c: any) => {
+          const spec = typeof c === "number" ? { node: c } : c;
+          return spec.groups || spec.capabilities || spec.profile
+            ? { node: spec.node, ...(spec.groups ? { groups: spec.groups } : {}), ...(spec.capabilities ? { capabilities: spec.capabilities } : {}), ...(spec.profile ? { profile: spec.profile } : {}) }
+            : spec.node;
+        }),
       };
       if (g.profile) out.profile = g.profile;
       if (g.capabilities) out.capabilities = g.capabilities;

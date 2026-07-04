@@ -95,8 +95,25 @@ export class ZwaveClient {
     if (!ws) return Promise.reject(new Error("not connected"));
     const messageId = `m${++this.msgId}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(messageId, { resolve, reject });
-      ws.send(JSON.stringify({ messageId, command, ...extra }));
+      // Guard against a silently-dead connection hanging the caller forever.
+      const timer = setTimeout(() => {
+        if (!this.pending.has(messageId)) return;
+        this.pending.delete(messageId);
+        this.open = false; // force a reconnect on the next request
+        reject(new Error(`zwave-js-server request "${command}" timed out`));
+      }, 15000);
+      this.pending.set(messageId, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      try {
+        ws.send(JSON.stringify({ messageId, command, ...extra }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(messageId);
+        this.open = false;
+        reject(e);
+      }
     });
   }
 

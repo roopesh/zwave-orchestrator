@@ -114,6 +114,7 @@
           <h2 style="margin:0">Policies</h2>
           <div class="row">
             <button class="sm" id="btnSyncAllParams" title="Apply every policy's settings to its devices">Sync all</button>
+            <button class="sm" id="btnLedPolicy" title="Start a policy that syncs LED strip color/brightness across devices">LED appearance</button>
             <button class="primary sm" id="btnNewPolicy">+ New policy</button>
           </div>
         </div>
@@ -214,7 +215,7 @@
             const fix = st.issue?.remediation ? `<div class="issue ${st.issue.severity === "warning" ? "warn" : ""}">${esc(st.issue.message)}<div class="fix">→ ${esc(st.issue.remediation)}</div></div>` : "";
             return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
           }).join("");
-          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ") + (g.ledSync ? ` <span class="chip good">LED sync</span>` : "");
+          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ") + (g.ledSync ? ` <span class="chip good">LED tracking</span>` : "");
           const staleForGang = (S.stale || []).filter((a) => a.gang === g.name);
           const staleNote = staleForGang.length
             ? `<div class="issue warn"><b>${staleForGang.length}</b> link(s) not in this setup — <b>Sync</b> will remove them:<div class="fix">${staleForGang.map((a) => `#${a.source} ${esc(nodeLabel(nodeById(a.source)))} — ${esc(a.capabilityTitle || "extra")}`).join("<br>")}</div></div>`
@@ -288,8 +289,8 @@
                 <div class="checks" style="margin-top:8px">${(S.capabilities || []).map(capRow).join("")}</div>
               </div>
             </div>
-            <label style="display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--ink)"><input type="checkbox" id="gLed" ${existing?.ledSync ? "checked" : ""} style="width:auto"/> Sync LED bars across this gang</label>
-            <div class="sub" style="margin-top:2px">Wires the load back to each companion so every LED bar tracks together.</div>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--ink)"><input type="checkbox" id="gLed" ${existing?.ledSync ? "checked" : ""} style="width:auto"/> Mirror brightness to companions (so LED bars track the load)</label>
+            <div class="sub" style="margin-top:2px">Association: wires the load back to each companion so their bars follow the load's level in real time. LED color/brightness is a <i>parameter</i> — set that in the Parameters tab.</div>
             <div class="issue warn" id="compat" style="display:none"></div>
           </div>
           <div class="modal-f">
@@ -532,10 +533,12 @@
         await loadParams();
       }
 
-      function openPolicyModal(existing) {
+      function openPolicyModal(existing, seedParams, seedTargets) {
         const nodes = (P.nodes || []).filter((n) => !n.isController);
-        const targets = new Set(existing ? existing.targets : []);
+        const targets = new Set(existing ? existing.targets : seedTargets || []);
         const settings = existing ? existing.settings.map((s) => ({ param: s.param, value: s.value })) : [];
+        if (!existing && seedParams) for (const num of seedParams) { const def = paramDefAny(num); if (def) settings.push({ param: num, value: def.default ?? def.options?.[0]?.value ?? def.value ?? 0 }); }
+        const seedName = !existing && seedParams && seedParams.length ? "LED appearance" : "";
         const m = $("#policyModal");
         const availableParams = () => {
           const map = new Map();
@@ -546,7 +549,7 @@
         m.innerHTML = `<form method="dialog">
           <div class="modal-h">${existing ? "Edit policy" : "New policy"}</div>
           <div class="modal-b">
-            <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : ""}" placeholder="e.g. Inovelli defaults" />
+            <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : esc(seedName)}" placeholder="e.g. Inovelli defaults" />
             <label>Apply to devices</label>
             <div class="checks" id="pTargets">${nodes.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div>
             ${existing ? "" : `<label>Prefill settings from a device (optional)</label><select id="pSeed"><option value="">— snapshot a well-configured switch —</option>${nodes.map((n) => `<option value="${n.id}">#${n.id} ${esc(pLabel(n))}</option>`).join("")}</select>`}
@@ -573,7 +576,7 @@
           const box = m.querySelector("#pSettings");
           box.innerHTML = settings.map((s, i) => {
             const inList = avail.some((p) => p.param === s.param);
-            const extra = inList ? "" : `<option value="${s.param}" selected>p${s.param} (no selected device has it)</option>`;
+            const extra = inList ? "" : `<option value="${s.param}" selected>${esc((paramDefAny(s.param, [...targets]) || {}).label || "p" + s.param)}</option>`;
             const opts = avail.map((p) => `<option value="${p.param}" ${p.param === s.param ? "selected" : ""}>${esc(p.label)}</option>`).join("");
             return `<div class="setline"><select data-param="${i}">${extra}${opts}</select> = ${valueControl(i)} <button type="button" class="ghost" data-del="${i}">✕</button></div>`;
           }).join("") || `<div class="sub" style="margin-bottom:7px">No settings yet — add one.</div>`;
@@ -638,6 +641,12 @@
         if (tab === "params" && !P) loadParams();
       });
       $("#btnNewPolicy").onclick = () => openPolicyModal(null);
+      $("#btnLedPolicy").onclick = () => {
+        const led = new Set(), tgts = new Set();
+        for (const n of P?.nodes || []) for (const p of P.params[n.id] || []) if (p.writeable && /led/i.test(p.label)) { led.add(p.param); tgts.add(n.id); }
+        if (!led.size) { toast("No LED parameters found on your devices"); return; }
+        openPolicyModal(null, [...led].sort((a, b) => a - b), [...tgts]);
+      };
       $("#btnSyncAllParams").onclick = () => doParamSync({});
       $("#policies").addEventListener("click", (e) => {
         const t = e.target.closest("button"); if (!t) return;
