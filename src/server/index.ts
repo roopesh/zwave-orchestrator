@@ -11,7 +11,7 @@ import { resolveConnection, type Connection } from "../config.ts";
 import { ZwaveClient } from "../zwave/client.ts";
 import { ZWaveAdapter } from "../zwave/adapter.ts";
 import { loadTopology, saveTopology, type Topology } from "../topology/gangs.ts";
-import { computePlan, computeTeardown, type PlanAction } from "../topology/plan.ts";
+import { computePlan, computeStale, computeTeardown, type PlanAction } from "../topology/plan.ts";
 import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import type { NodeDump } from "../types.ts";
@@ -139,6 +139,7 @@ async function main(): Promise<void> {
       if (path === "/api/state") return void (await handleState(hub, res));
       if (path === "/api/apply" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "add"));
       if (path === "/api/teardown" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "remove"));
+      if (path === "/api/reconcile" && req.method === "POST") return void (await handleReconcile(hub, res, await readBody(req)));
       if (path === "/api/gangs" && req.method === "POST") return void (await handleSaveGangs(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
@@ -161,11 +162,11 @@ async function handleState(hub: Hub, res: ServerResponse): Promise<void> {
   try {
     adapter = await hub.ensure();
   } catch {
-    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0 } });
+    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0 }, stale: [] });
     return;
   }
-  const [nodes, plan] = [await buildNodes(adapter), await computePlan(adapter, topology)];
-  json(res, 200, { ...base, connection: { ...base.connection, connected: true }, nodes, plan });
+  const [nodes, plan, stale] = [await buildNodes(adapter), await computePlan(adapter, topology), await computeStale(adapter, topology)];
+  json(res, 200, { ...base, connection: { ...base.connection, connected: true }, nodes, plan, stale: stale.actions });
 }
 
 async function handleWrite(hub: Hub, res: ServerResponse, body: any, mode: "add" | "remove"): Promise<void> {
@@ -175,6 +176,18 @@ async function handleWrite(hub: Hub, res: ServerResponse, body: any, mode: "add"
   const results = await applyActions(adapter, filterActions(plan.actions, body));
   const after = await computePlan(adapter, topology); // fresh plan reflecting the writes
   json(res, 200, { results, plan: after });
+}
+
+async function handleReconcile(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const adapter = await hub.ensure();
+  const topology = loadTopology(GANGS_FILE);
+  const addPlan = await computePlan(adapter, topology);
+  const addResults = await applyActions(adapter, filterActions(addPlan.actions, body));
+  const stalePlan = await computeStale(adapter, topology);
+  const remResults = await applyActions(adapter, filterActions(stalePlan.actions, body));
+  const after = await computePlan(adapter, topology);
+  const afterStale = await computeStale(adapter, topology);
+  json(res, 200, { results: [...addResults, ...remResults], plan: after, stale: afterStale.actions });
 }
 
 async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promise<void> {

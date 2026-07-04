@@ -83,7 +83,7 @@
       <div class="row between">
         <h2 style="margin:0">Gangs</h2>
         <div class="row">
-          <button class="sm" id="btnApplyAll">Apply all</button>
+          <button class="sm" id="btnSyncAll" title="Add missing links and remove any not in your setup">Sync all</button>
           <button class="primary sm" id="btnNewGang">+ New gang</button>
         </div>
       </div>
@@ -168,17 +168,22 @@
             return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
           }).join("");
           const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ");
+          const staleForGang = (S.stale || []).filter((a) => a.gang === g.name);
+          const staleNote = staleForGang.length
+            ? `<div class="issue warn"><b>${staleForGang.length}</b> link(s) not in this setup — <b>Sync</b> will remove them:<div class="fix">${staleForGang.map((a) => `#${a.source} ${esc(nodeLabel(nodeById(a.source)))} — ${esc(a.capabilityTitle || "extra")}`).join("<br>")}</div></div>`
+            : "";
           return `<div class="card">
             <div class="gang-head">
               <span class="name">${esc(g.name)}</span>
               <span class="load">→ load #${g.load} ${esc(nodeLabel(load))}</span>
               <div class="spacer" style="flex:1"></div>
               <button class="sm" data-edit="${esc(g.name)}">Edit</button>
-              <button class="sm" data-apply="${esc(g.name)}">Apply</button>
+              <button class="sm primary" data-sync="${esc(g.name)}" title="Add missing links and remove any not in this setup">Sync</button>
               <button class="sm ghost" data-teardown="${esc(g.name)}">Teardown</button>
             </div>
             <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
             ${comps}
+            ${staleNote}
           </div>`;
         }).join("");
       }
@@ -196,10 +201,11 @@
 
       // ---- writes ----
       async function doWrite(kind, filter) {
-        toast(kind === "add" ? "Applying…" : "Removing…");
-        const r = await api(kind === "add" ? "/api/apply" : "/api/teardown", "POST", filter || {});
+        const path = kind === "add" ? "/api/apply" : kind === "remove" ? "/api/teardown" : "/api/reconcile";
+        toast(kind === "sync" ? "Syncing…" : kind === "add" ? "Applying…" : "Removing…");
+        const r = await api(path, "POST", filter || {});
         const failed = (r.results || []).filter((x) => !x.ok).length;
-        toast(`${(r.results || []).length - failed} ${kind === "add" ? "added" : "removed"}${failed ? ", " + failed + " failed" : ""}`);
+        toast(`${(r.results || []).length - failed} change(s)${failed ? ", " + failed + " failed" : ""}`);
         await loadState();
       }
 
@@ -340,10 +346,10 @@
       $("#btnRefresh").onclick = loadState;
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
-      $("#btnApplyAll").onclick = () => doWrite("add", {});
+      $("#btnSyncAll").onclick = () => doWrite("sync", {});
       $("#gangs").addEventListener("click", (e) => {
         const t = e.target.closest("button"); if (!t) return;
-        if (t.dataset.apply) doWrite("add", { gang: t.dataset.apply });
+        if (t.dataset.sync) doWrite("sync", { gang: t.dataset.sync });
         else if (t.dataset.teardown) doWrite("remove", { gang: t.dataset.teardown });
         else if (t.dataset.edit) openGangModal((S.topology.gangs || []).find((g) => g.name === t.dataset.edit));
       });

@@ -6,7 +6,8 @@ import type { ZNode } from "../types.ts";
 import type { AssociationTransport } from "../zwave/adapter.ts";
 import type { GangSpec, Topology } from "./gangs.ts";
 import { rawGroupsFor, wantedCapabilitiesFor } from "./gangs.ts";
-import { CAPABILITIES, resolveGroups, type CapabilityId } from "./capabilities.ts";
+import { CAPABILITIES, groupCapabilities, resolveGroups, type CapabilityId } from "./capabilities.ts";
+import type { AssociationGroup } from "../types.ts";
 
 export interface PlanAction {
   kind: "add" | "remove";
@@ -16,6 +17,8 @@ export interface PlanAction {
   groupLabel: string;
   target: number;
   targetEndpoint?: number;
+  /** Plain-language behavior this group provides — for describing stale links without group numbers. */
+  capabilityTitle?: string;
 }
 
 export interface PlanIssue {
@@ -35,6 +38,11 @@ export interface Plan {
 
 const label = (n: ZNode) => n.name || n.product || `node ${n.id}`;
 const capTitle = (c: CapabilityId) => CAPABILITIES.find((x) => x.id === c)?.title ?? c;
+/** Human description of what a group does, for stale-link messaging (never shows group numbers). */
+function groupBehavior(g: AssociationGroup): string {
+  const caps = [...groupCapabilities(g)];
+  return caps.length ? CAPABILITIES.filter((c) => caps.includes(c.id)).map((c) => c.title).join(" / ") : "an extra action";
+}
 const isLinkedTo = (list: { nodeId: number; endpoint?: number }[] | undefined, target: number) =>
   (list ?? []).some((t) => t.nodeId === target && (t.endpoint ?? 0) === 0);
 
@@ -167,4 +175,35 @@ export async function computeTeardown(adapter: AssociationTransport, topo: Topol
     }
   }
   return { actions, issues, satisfied: 0 };
+}
+
+/** Stale links: companion->load associations that exist on non-lifeline groups OUTSIDE the desired
+ *  set (e.g. left over after narrowing a gang's behavior). Remove actions to make live match intent. */
+export async function computeStale(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
+  const nodes = await adapter.getNodes();
+  const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
+  const read = makeReader(adapter);
+  const actions: PlanAction[] = [];
+
+  for (const gang of topo.gangs) {
+    if (!byId.has(gang.load)) continue;
+    for (const comp of gang.companions) {
+      const src = byId.get(comp.node);
+      if (!src || src.isLongRange) continue;
+      const deviceGroups = await read.groupsOf(comp.node);
+      const groupsById = new Map(deviceGroups.map((g) => [g.id, g]));
+      const desired = new Set(groupsForCompanion(topo, gang, comp, deviceGroups, src, []));
+      const current = await read.assocOf(comp.node);
+      for (const [gidStr, list] of Object.entries(current)) {
+        const gid = Number(gidStr);
+        const g = groupsById.get(gid);
+        if (!g || g.isLifeline || desired.has(gid)) continue;
+        const stored = (list ?? []).find((t) => t.nodeId === gang.load && (t.endpoint ?? 0) === 0);
+        if (stored) {
+          actions.push({ kind: "remove", gang: gang.name, source: comp.node, group: gid, groupLabel: g.label, target: gang.load, targetEndpoint: stored.endpoint, capabilityTitle: groupBehavior(g) });
+        }
+      }
+    }
+  }
+  return { actions, issues: [], satisfied: 0 };
 }
