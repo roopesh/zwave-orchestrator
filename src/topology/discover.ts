@@ -1,7 +1,11 @@
 // Discover gangs from an EXISTING install: read the live associations and reverse-engineer the
-// load→companion structure, so someone who already wired associations by hand can adopt the tool
-// and manage them going forward. Companion→load edges (a companion associates TO the load switch);
-// we group by load, and infer behaviors from the groups in use.
+// load→companion structure, so someone who already wired associations by hand can adopt the tool.
+//
+// The tricky part is direction: an association A→B could mean "A is a companion of load B", but a
+// load that broadcasts its level back to companions (LED-sync / full-mesh) also produces B→A. We
+// use in-degree to tell them apart: the real load is the node that MANY switches point to, so an
+// edge S→T is only treated as companion→load when in-degree(S) <= in-degree(T) — reverse/broadcast
+// links (from a high-in-degree load out to a companion) are dropped.
 
 import type { AssociationTransport } from "../zwave/adapter.ts";
 import { CAPABILITIES, groupCapabilities, type CapabilityId } from "./capabilities.ts";
@@ -13,14 +17,19 @@ export interface DiscoveredGang {
   capabilities: CapabilityId[];
 }
 
+interface Edge {
+  source: number;
+  target: number;
+  caps: Set<CapabilityId>;
+}
+
 export async function discoverGangs(adapter: AssociationTransport): Promise<DiscoveredGang[]> {
   const nodes = await adapter.getNodes();
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const controllers = new Set(nodes.filter((n) => n.isController).map((n) => n.id));
 
-  // load id -> (companion id -> set of capabilities it sends toward the load)
-  const loads = new Map<number, Map<number, Set<CapabilityId>>>();
-
+  // Pass 1: collect control edges source→target (with the capabilities the source sends).
+  const edges: Edge[] = [];
   for (const n of nodes) {
     if (n.isController || n.isLongRange) continue;
     let groups, assoc;
@@ -28,22 +37,38 @@ export async function discoverGangs(adapter: AssociationTransport): Promise<Disc
       groups = await adapter.getAssociationGroups({ nodeId: n.id });
       assoc = await adapter.getAssociations({ nodeId: n.id });
     } catch {
-      continue; // no Association CC
+      continue;
     }
-    const groupsById = new Map(groups.map((g) => [g.id, g]));
+    const gById = new Map(groups.map((g) => [g.id, g]));
+    const perTarget = new Map<number, Set<CapabilityId>>();
     for (const [gidStr, targets] of Object.entries(assoc)) {
-      const g = groupsById.get(Number(gidStr));
+      const g = gById.get(Number(gidStr));
       if (!g || g.isLifeline) continue;
       const caps = groupCapabilities(g);
       if (!caps.size) continue;
       for (const t of targets ?? []) {
         if (controllers.has(t.nodeId) || t.nodeId === n.id || !byId.has(t.nodeId)) continue;
-        if (!loads.has(t.nodeId)) loads.set(t.nodeId, new Map());
-        const comps = loads.get(t.nodeId)!;
-        if (!comps.has(n.id)) comps.set(n.id, new Set());
-        for (const c of caps) comps.get(n.id)!.add(c);
+        if (!perTarget.has(t.nodeId)) perTarget.set(t.nodeId, new Set());
+        for (const c of caps) perTarget.get(t.nodeId)!.add(c);
       }
     }
+    for (const [target, caps] of perTarget) edges.push({ source: n.id, target, caps });
+  }
+
+  // in-degree = number of distinct sources pointing to a node.
+  const inSources = new Map<number, Set<number>>();
+  for (const e of edges) {
+    if (!inSources.has(e.target)) inSources.set(e.target, new Set());
+    inSources.get(e.target)!.add(e.source);
+  }
+  const deg = (id: number) => inSources.get(id)?.size ?? 0;
+
+  // Pass 2: keep an edge as companion→load only when the source isn't a "bigger" load than the target.
+  const loads = new Map<number, Map<number, Set<CapabilityId>>>();
+  for (const e of edges) {
+    if (deg(e.source) > deg(e.target)) continue; // reverse / broadcast link
+    if (!loads.has(e.target)) loads.set(e.target, new Map());
+    loads.get(e.target)!.set(e.source, e.caps);
   }
 
   const order = CAPABILITIES.map((c) => c.id);

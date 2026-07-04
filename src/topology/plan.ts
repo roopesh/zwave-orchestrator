@@ -212,42 +212,54 @@ export async function computeTeardown(adapter: AssociationTransport, topo: Topol
   return { actions, issues, satisfied: 0 };
 }
 
-/** Stale links: companion->load associations that exist on non-lifeline groups OUTSIDE the desired
- *  set (e.g. left over after narrowing a gang's behavior). Remove actions to make live match intent. */
+/** Stale links: any control association *touching a managed load* that the topology doesn't want —
+ *  a removed companion's link, an orphaned load→companion broadcast, a link to a removed device, or
+ *  a link left over after narrowing a gang. Authoritative: it inspects the whole mesh, not just the
+ *  companions still listed, so removing a companion (or a device) actually un-associates on Sync. */
 export async function computeStale(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
   const actions: PlanAction[] = [];
 
+  // Managed loads + the desired directed control links: `${source}|${group}|${target}`.
+  const loadIds = new Set<number>();
+  const loadName = new Map<number, string>();
+  for (const g of topo.gangs) if (byId.has(g.load)) { loadIds.add(g.load); loadName.set(g.load, g.name); }
+
+  const desired = new Set<string>();
   for (const gang of topo.gangs) {
     if (!byId.has(gang.load)) continue;
     for (const comp of gang.companions) {
       const src = byId.get(comp.node);
       if (!src || src.isLongRange) continue;
-      const deviceGroups = await read.groupsOf(comp.node);
-      const groupsById = new Map(deviceGroups.map((g) => [g.id, g]));
-      const desired = new Set(groupsForCompanion(topo, gang, comp, deviceGroups, src, []));
-      const current = await read.assocOf(comp.node);
-      for (const [gidStr, list] of Object.entries(current)) {
-        const gid = Number(gidStr);
-        const g = groupsById.get(gid);
-        if (!g || g.isLifeline || desired.has(gid)) continue;
-        const stored = (list ?? []).find((t) => t.nodeId === gang.load && (t.endpoint ?? 0) === 0);
-        if (stored) {
-          actions.push({ kind: "remove", gang: gang.name, source: comp.node, group: gid, groupLabel: g.label, target: gang.load, targetEndpoint: stored.endpoint, capabilityTitle: groupBehavior(g) });
-        }
+      const groups = await read.groupsOf(comp.node);
+      for (const gid of groupsForCompanion(topo, gang, comp, groups, src, [])) desired.add(`${comp.node}|${gid}|${gang.load}`);
+    }
+    if (gang.ledSync) {
+      const ctx = await levelGroupOfLoad(read, gang.load);
+      if (ctx) for (const comp of gang.companions) {
+        const c = byId.get(comp.node);
+        if (c && !c.isLongRange) desired.add(`${gang.load}|${ctx.gid}|${comp.node}`);
       }
     }
+  }
 
-    // LED-sync stale: load -> companion level links that shouldn't exist (LED sync off, or a
-    // companion that's no longer in the gang). Only touches links to this gang's own companions.
-    const ctx = await levelGroupOfLoad(read, gang.load);
-    if (ctx) {
-      const wanted = gang.ledSync ? new Set(gang.companions.map((c) => c.node)) : new Set<number>();
-      for (const t of ctx.current) {
-        if (!gang.companions.some((c) => c.node === t.nodeId) || wanted.has(t.nodeId)) continue;
-        actions.push({ kind: "remove", gang: gang.name, source: gang.load, group: ctx.gid, groupLabel: ctx.group.label, target: t.nodeId, targetEndpoint: t.endpoint, capabilityTitle: groupBehavior(ctx.group) });
+  // Scan every device's control associations; anything touching a managed load that isn't desired is stale.
+  for (const n of nodes) {
+    if (n.isController || n.isLongRange) continue;
+    const groups = await read.groupsOf(n.id);
+    const gById = new Map(groups.map((g) => [g.id, g]));
+    const assoc = await read.assocOf(n.id);
+    for (const [gidStr, list] of Object.entries(assoc)) {
+      const gid = Number(gidStr);
+      const g = gById.get(gid);
+      if (!g || g.isLifeline || groupCapabilities(g).size === 0) continue;
+      for (const t of list ?? []) {
+        if (!loadIds.has(t.nodeId) && !loadIds.has(n.id)) continue; // only manage links involving a load
+        if (desired.has(`${n.id}|${gid}|${t.nodeId}`)) continue;
+        const gang = loadName.get(t.nodeId) ?? loadName.get(n.id) ?? "";
+        actions.push({ kind: "remove", gang, source: n.id, group: gid, groupLabel: g.label, target: t.nodeId, targetEndpoint: t.endpoint, capabilityTitle: groupBehavior(g) });
       }
     }
   }

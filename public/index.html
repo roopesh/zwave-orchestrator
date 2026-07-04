@@ -103,6 +103,7 @@
             <button class="primary sm" id="btnNewGang">+ New gang</button>
           </div>
         </div>
+        <div id="removedBanner"></div>
         <div id="gangs"></div>
 
         <h2>Nodes</h2>
@@ -164,8 +165,37 @@
       function render() {
         renderConn();
         renderBanner();
+        renderRemoved();
         renderGangs();
         renderNodes();
+      }
+
+      // Surface gang references to devices no longer on the mesh, with one-click cleanup.
+      function renderRemoved() {
+        const el = $("#removedBanner");
+        if (!el) return;
+        const meshIds = new Set((S.nodes || []).map((n) => n.id));
+        const compGone = [], loadGone = [];
+        for (const g of S.topology.gangs || []) {
+          if (!meshIds.has(g.load)) loadGone.push(`#${g.load} (load of "${g.name}")`);
+          for (const c of g.companions) { const id = typeof c === "number" ? c : c.node; if (!meshIds.has(id)) compGone.push(`#${id} (in "${g.name}")`); }
+        }
+        if (!compGone.length && !loadGone.length) { el.innerHTML = ""; return; }
+        el.innerHTML = `<div class="card" style="border-color:rgba(230,182,76,.45)">
+          <b>Removed devices referenced in your gangs</b>
+          ${compGone.length ? `<div class="sub" style="margin-top:6px">Companions no longer on the mesh: ${esc(compGone.join(", "))}</div>` : ""}
+          ${loadGone.length ? `<div class="sub" style="margin-top:6px">Loads no longer on the mesh: ${esc(loadGone.join(", "))} — edit or delete those gangs.</div>` : ""}
+          ${compGone.length ? `<div style="margin-top:10px"><button class="sm" id="btnPrune">Remove ${compGone.length} missing companion(s) from gangs.yaml</button></div>` : ""}
+        </div>`;
+        const btn = document.getElementById("btnPrune");
+        if (btn) btn.onclick = pruneRemoved;
+      }
+
+      async function pruneRemoved() {
+        const meshIds = new Set((S.nodes || []).map((n) => n.id));
+        const gangs = (S.topology.gangs || []).map((g) => ({ ...g, companions: g.companions.filter((c) => meshIds.has(typeof c === "number" ? c : c.node)) }));
+        await saveGangs(gangs);
+        toast("Pruned missing companions");
       }
 
       function renderBanner() {
@@ -227,7 +257,7 @@
               <div class="spacer" style="flex:1"></div>
               <button class="sm" data-edit="${esc(g.name)}">Edit</button>
               <button class="sm primary" data-sync="${esc(g.name)}" title="Add missing links and remove any not in this setup">Sync</button>
-              <button class="sm ghost" data-teardown="${esc(g.name)}">Teardown</button>
+              <button class="sm ghost" data-teardown="${esc(g.name)}" title="Remove all of this gang's associations. Note: Sync re-adds them — to permanently un-associate a switch, remove it from the gang (Edit) then Sync.">Teardown</button>
             </div>
             <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
             ${comps}
@@ -405,20 +435,32 @@
             <div class="sub">Behaviors: ${behaviors}</div>
           </div>`;
         };
+        // Gangs in gangs.yaml whose load isn't a discovered load — likely stale/phantom; offer removal.
+        const discLoads = new Set(discovered.map((d) => d.load));
+        const extras = (S.topology.gangs || []).filter((g) => !discLoads.has(g.load));
+        const extraRow = (g, i) => `<div class="card" style="margin-bottom:8px; border-color:rgba(230,182,76,.4)">
+            <label style="display:flex; gap:8px; align-items:center; color:var(--ink); margin:0">
+              <input type="checkbox" data-rm="${i}" style="width:auto"/>
+              <b>${esc(g.name)}</b> <span class="chip warn">not in wiring</span>
+            </label>
+            <div class="sub" style="margin-top:6px">Load #${g.load} — this gang isn't backed by any associations on the mesh.</div>
+          </div>`;
         m.innerHTML = `<form method="dialog">
-          <div class="modal-h">Import gangs from your existing wiring</div>
+          <div class="modal-h">Sync gangs with your existing wiring</div>
           <div class="modal-b">
-            <div class="sub" style="margin-bottom:10px">Found ${discovered.length} gang(s) in your live associations. Pick which to add to gangs.yaml — you can rename and tune them afterward.</div>
+            <div class="sub" style="margin-bottom:10px">Found ${discovered.length} gang(s) in your live associations. Pick which to add/update — rename and tune afterward.</div>
             ${discovered.map(row).join("")}
+            ${extras.length ? `<h3 class="sub" style="margin:14px 0 8px">In your config but not on the mesh (${extras.length}) — check to remove:</h3>${extras.map(extraRow).join("")}` : ""}
           </div>
-          <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="import">Import selected</button></div>
+          <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="import">Apply</button></div>
         </form>`;
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
           if (m.returnValue !== "import") return;
           const chosen = [...m.querySelectorAll("[data-imp]:checked")].map((c) => discovered[Number(c.dataset.imp)]);
-          if (!chosen.length) { toast("Nothing selected"); return; }
-          const gangs = (S.topology.gangs || []).slice();
+          const removeNames = new Set([...m.querySelectorAll("[data-rm]:checked")].map((c) => extras[Number(c.dataset.rm)].name));
+          if (!chosen.length && !removeNames.size) { toast("Nothing selected"); return; }
+          let gangs = (S.topology.gangs || []).filter((g) => !removeNames.has(g.name));
           for (const d of chosen) {
             const gang = { name: d.name, load: d.load, companions: d.companions };
             const match = (S.presets || []).find((p) => sameSet(p.capabilities, d.capabilities));
@@ -427,7 +469,7 @@
             if (idx >= 0) gangs[idx] = gang; else gangs.push(gang);
           }
           await saveGangs(gangs);
-          toast(`Imported ${chosen.length} gang(s)`);
+          toast(`Added/updated ${chosen.length}, removed ${removeNames.size}`);
         });
         m.showModal();
       }
