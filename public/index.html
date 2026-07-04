@@ -549,6 +549,7 @@
             <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : ""}" placeholder="e.g. Inovelli defaults" />
             <label>Apply to devices</label>
             <div class="checks" id="pTargets">${nodes.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div>
+            ${existing ? "" : `<label>Prefill settings from a device (optional)</label><select id="pSeed"><option value="">— snapshot a well-configured switch —</option>${nodes.map((n) => `<option value="${n.id}">#${n.id} ${esc(pLabel(n))}</option>`).join("")}</select>`}
             <label>Settings (pick a parameter and the value you want)</label>
             <div id="pSettings"></div>
             <button type="button" class="sm" id="pAdd">+ Add setting</button>
@@ -587,6 +588,16 @@
         }
 
         paintSettings(); updateNote();
+        const seedSel = m.querySelector("#pSeed");
+        if (seedSel) seedSel.addEventListener("change", () => {
+          const id = Number(seedSel.value); if (!id) return;
+          targets.add(id);
+          const tc = m.querySelector(`[data-tgt][value="${id}"]`); if (tc) tc.checked = true;
+          settings.length = 0;
+          for (const p of P.params[id] || []) if (p.writeable && p.value != null && p.default != null && p.value !== p.default) settings.push({ param: p.param, value: p.value });
+          paintSettings(); updateNote();
+          toast(`Loaded ${settings.length} customized setting(s) from #${id}`);
+        });
         m.querySelectorAll("[data-tgt]").forEach((c) => c.addEventListener("change", () => { c.checked ? targets.add(Number(c.value)) : targets.delete(Number(c.value)); paintSettings(); updateNote(); }));
         m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; settings.push({ param: a ? a.param : 1, value: a ? (a.default ?? a.options?.[0]?.value ?? 0) : 0 }); paintSettings(); updateNote(); });
 
