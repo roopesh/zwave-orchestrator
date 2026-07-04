@@ -5,8 +5,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { resolveConnection, type Connection } from "../config.ts";
 import { ZwaveClient } from "../zwave/client.ts";
 import { ZWaveAdapter } from "../zwave/adapter.ts";
@@ -19,9 +19,17 @@ import type { NodeDump } from "../types.ts";
 type UiNode = NodeDump & { supports: string[] };
 
 const PORT = Number(process.env.PORT ?? 8090);
-const PUBLIC_DIR = join(process.cwd(), "public");
 const GANGS_FILE = process.env.GANGS_FILE ?? "gangs.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
+
+// Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
+// and an installed package (npx), falling back to cwd.
+function resolvePublicDir(): string {
+  const here = import.meta.dirname;
+  const candidates = [process.env.PUBLIC_DIR, join(here, "..", "public"), join(here, "..", "..", "public"), join(here, "public"), join(process.cwd(), "public")].filter(Boolean) as string[];
+  return candidates.find((p) => existsSync(join(p, "index.html"))) ?? join(process.cwd(), "public");
+}
+const PUBLIC_DIR = resolvePublicDir();
 
 /** Holds the live connection to zwave-js-server and reconnects on demand. */
 class Hub {
@@ -202,6 +210,7 @@ async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promis
 async function handleConfig(hub: Hub, res: ServerResponse, body: any): Promise<void> {
   const host = String(body?.host ?? hub.conn.host);
   const port = Number(body?.port ?? hub.conn.port);
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify({ host, port }, null, 2) + "\n");
   const conn: Connection = { host, port, url: `ws://${host}:${port}` };
   try {

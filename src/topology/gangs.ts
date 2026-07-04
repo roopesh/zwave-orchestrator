@@ -3,7 +3,7 @@
 // concrete group numbers are resolved per device at plan time. Explicit `groups`/`controlGroups`
 // remain honored as a power-user override.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parse, stringify } from "yaml";
 import { presetCapabilities, type CapabilityId } from "./capabilities.ts";
 
@@ -29,6 +29,8 @@ export interface Topology {
 }
 
 export function loadTopology(path: string): Topology {
+  // First run (npx / fresh Docker volume): no file yet — start empty; saveTopology creates it.
+  if (!existsSync(path)) return { defaults: { profile: "full" }, gangs: [] };
   const raw = (parse(readFileSync(path, "utf8")) ?? {}) as any;
   const d = raw.defaults ?? {};
   const defaults = { profile: d.profile, capabilities: d.capabilities, controlGroups: d.controlGroups };

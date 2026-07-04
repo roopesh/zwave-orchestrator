@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.github
+.claude
+*.log
+# Personal data — provided at runtime via env + a mounted /data volume
+gangs.yaml
+config/config.json
