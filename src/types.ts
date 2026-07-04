@@ -14,6 +14,9 @@ export interface AssociationGroup {
   isLifeline: boolean;
   multiChannel: boolean;
   profile?: number;
+  /** CommandClass id -> command ids this group issues. The device-reported, brand-agnostic
+   *  description of what the group actually does; we derive capabilities from it. */
+  issuedCommands?: Record<number, number[]>;
 }
 
 /** A node as we care about it: identity + labels + product, transport-agnostic. */

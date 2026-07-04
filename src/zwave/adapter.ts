@@ -47,6 +47,7 @@ export class ZWaveAdapter implements AssociationTransport {
       isLifeline: g.isLifeline,
       multiChannel: g.multiChannel,
       profile: g.profile,
+      issuedCommands: g.issuedCommands,
     }));
   }
 

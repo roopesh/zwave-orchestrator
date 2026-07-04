@@ -1,69 +1,93 @@
-// Load and normalize the declarative topology (gangs.yaml) — the source of truth.
-// A companion may be a bare node id, or an object with a per-companion group override.
+// Load, normalize, and persist the declarative topology (gangs.yaml) — the source of truth.
+// Capability-first: a gang/companion expresses INTENT (a preset id or explicit capabilities);
+// concrete group numbers are resolved per device at plan time. Explicit `groups`/`controlGroups`
+// remain honored as a power-user override.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parse, stringify } from "yaml";
+import { presetCapabilities, type CapabilityId } from "./capabilities.ts";
 
 export interface CompanionSpec {
   node: number;
-  /** Override the control groups wired on this companion (else gang, else defaults). */
-  groups?: number[];
+  groups?: number[]; // explicit override (bypasses capability resolution)
+  capabilities?: CapabilityId[];
+  profile?: string; // preset id, e.g. "full"
 }
 
 export interface GangSpec {
   name: string;
   load: number;
   companions: CompanionSpec[];
-  /** Override the default control groups for this gang. */
-  controlGroups?: number[];
+  controlGroups?: number[]; // explicit override for the whole gang
+  capabilities?: CapabilityId[];
+  profile?: string;
 }
 
 export interface Topology {
-  defaults: { controlGroups: number[] };
+  defaults: { profile?: string; capabilities?: CapabilityId[]; controlGroups?: number[] };
   gangs: GangSpec[];
 }
 
-const DEFAULT_CONTROL_GROUPS = [2, 3, 4];
-
 export function loadTopology(path: string): Topology {
   const raw = (parse(readFileSync(path, "utf8")) ?? {}) as any;
-  const defaults = {
-    controlGroups: raw.defaults?.controlGroups ?? DEFAULT_CONTROL_GROUPS,
-  };
+  const d = raw.defaults ?? {};
+  const defaults = { profile: d.profile, capabilities: d.capabilities, controlGroups: d.controlGroups };
   const gangs: GangSpec[] = (raw.gangs ?? []).map((g: any, i: number) => {
     if (g == null || g.load == null) {
       throw new Error(`gang #${i}${g?.name ? ` (${g.name})` : ""} is missing "load"`);
     }
     const companions: CompanionSpec[] = (g.companions ?? []).map((c: any) =>
-      typeof c === "number" ? { node: c } : { node: c.node, groups: c.groups },
+      typeof c === "number" ? { node: c } : { node: c.node, groups: c.groups, capabilities: c.capabilities, profile: c.profile },
     );
-    return {
-      name: g.name ?? `gang-${i}`,
-      load: g.load,
-      companions,
-      controlGroups: g.controlGroups,
-    };
+    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile };
   });
   return { defaults, gangs };
 }
 
-/** Resolve the control groups for a companion: per-companion > per-gang > defaults. */
-export function controlGroupsFor(topo: Topology, gang: GangSpec, comp: CompanionSpec): number[] {
-  return comp.groups ?? gang.controlGroups ?? topo.defaults.controlGroups;
+/** Explicit group override, if the user pinned specific numbers. Null = resolve by capability. */
+export function rawGroupsFor(topo: Topology, gang: GangSpec, comp: CompanionSpec): number[] | null {
+  return comp.groups ?? gang.controlGroups ?? topo.defaults.controlGroups ?? null;
+}
+
+/** Resolve the intended capabilities: companion > gang > defaults > "full". */
+export function wantedCapabilitiesFor(topo: Topology, gang: GangSpec, comp: CompanionSpec): CapabilityId[] {
+  const fromProfile = (p?: string) => (p ? presetCapabilities(p) : null);
+  return (
+    comp.capabilities ??
+    fromProfile(comp.profile) ??
+    gang.capabilities ??
+    fromProfile(gang.profile) ??
+    topo.defaults.capabilities ??
+    fromProfile(topo.defaults.profile) ??
+    ["onoff", "level", "dim"]
+  );
 }
 
 const SAVE_HEADER = "# Managed by zwave-associations (editable by hand or via the web UI).\n\n";
 
-/** Persist the topology back to disk, collapsing bare companions to plain node ids. */
 export function saveTopology(path: string, topo: Topology): void {
+  const defaults: Record<string, unknown> = {};
+  if (topo.defaults.profile) defaults.profile = topo.defaults.profile;
+  if (topo.defaults.capabilities) defaults.capabilities = topo.defaults.capabilities;
+  if (topo.defaults.controlGroups) defaults.controlGroups = topo.defaults.controlGroups;
+
   const doc = {
-    defaults: topo.defaults,
-    gangs: topo.gangs.map((g) => ({
-      name: g.name,
-      load: g.load,
-      companions: g.companions.map((c) => (c.groups ? { node: c.node, groups: c.groups } : c.node)),
-      ...(g.controlGroups ? { controlGroups: g.controlGroups } : {}),
-    })),
+    defaults,
+    gangs: topo.gangs.map((g) => {
+      const out: Record<string, unknown> = {
+        name: g.name,
+        load: g.load,
+        companions: g.companions.map((c) =>
+          c.groups || c.capabilities || c.profile
+            ? { node: c.node, ...(c.groups ? { groups: c.groups } : {}), ...(c.capabilities ? { capabilities: c.capabilities } : {}), ...(c.profile ? { profile: c.profile } : {}) }
+            : c.node,
+        ),
+      };
+      if (g.profile) out.profile = g.profile;
+      if (g.capabilities) out.capabilities = g.capabilities;
+      if (g.controlGroups) out.controlGroups = g.controlGroups;
+      return out;
+    }),
   };
   writeFileSync(path, SAVE_HEADER + stringify(doc));
 }

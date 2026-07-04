@@ -1,23 +1,36 @@
 # Declarative companion-switch topology — "associations-as-code".
 #
 # A *gang* is one load switch plus the companion/remote switches that should operate it
-# directly over Z-Wave (no Home Assistant round-trip). The tool derives the association
-# mesh from this file, diffs it against the controller's live state, and reconciles.
+# directly over Z-Wave (no Home Assistant round-trip). You express INTENT; the tool reads each
+# device's capabilities live and resolves the intent to that device's actual association groups.
+# This works across brands (Inovelli, Zooz, GE/Jasco, ...) and even mixed-device gangs.
 #
-# This file is the durable source of truth: it survives a controller rebuild or re-pair.
 # Copy to gangs.yaml and edit for your home.
 
 defaults:
-  # The association group used on each companion to reach the load switch.
-  # Inovelli VZW dimmers: group 3 = "Multilevel Switch Set" (dim + on/off follow).
-  # Override per-gang or per-companion when a model differs.
-  controlGroup: 3
+  # What companions should do, as a preset:
+  #   full         -> on/off + brightness sync + hold-to-dim  (a true multi-way dimmer)
+  #   onoff_level  -> on/off + brightness sync
+  #   onoff        -> on/off only (non-dimmable / switched loads)
+  profile: full
 
 gangs:
   - name: Kitchen Ceiling
-    load: 2 # [Kitchen] Ceiling Lights
-    companions: [3, 4] # Family Room remote, Garage Entry remote
+    load: 2 # the switch physically wired to the fixture
+    companions: [3, 4] # remotes that should control it
 
   - name: Kitchen Counter
-    load: 6 # [Kitchen] Counter Lights
-    companions: [5, 256] # Garage Entry remote, Family Room remote
+    load: 6
+    companions: [5, 256]
+
+  # Per-gang or per-companion overrides are allowed:
+  #
+  # - name: Hallway
+  #   load: 10
+  #   profile: onoff_level            # override the default for this gang
+  #   companions:
+  #     - 11
+  #     - node: 12
+  #       capabilities: [onoff]       # this companion only toggles
+  #     - node: 13
+  #       groups: [2, 4]              # power-user: pin explicit group numbers

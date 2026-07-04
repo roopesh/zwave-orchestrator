@@ -13,8 +13,10 @@ import { ZWaveAdapter } from "../zwave/adapter.ts";
 import { loadTopology, saveTopology, type Topology } from "../topology/gangs.ts";
 import { computePlan, computeTeardown, type PlanAction } from "../topology/plan.ts";
 import { applyActions } from "../topology/executor.ts";
-import { GROUP_INFO, GROUP_PROFILES } from "../topology/profiles.ts";
+import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import type { NodeDump } from "../types.ts";
+
+type UiNode = NodeDump & { supports: string[] };
 
 const PORT = Number(process.env.PORT ?? 8090);
 const PUBLIC_DIR = join(process.cwd(), "public");
@@ -62,20 +64,20 @@ class Hub {
   }
 }
 
-async function buildNodes(adapter: ZWaveAdapter): Promise<NodeDump[]> {
+async function buildNodes(adapter: ZWaveAdapter): Promise<UiNode[]> {
   const nodes = await adapter.getNodes();
-  const out: NodeDump[] = [];
+  const out: UiNode[] = [];
   for (const n of nodes) {
     if (n.isController) {
-      out.push({ ...n, groups: [], associations: {} });
+      out.push({ ...n, groups: [], associations: {}, supports: [] });
       continue;
     }
     try {
       const groups = await adapter.getAssociationGroups({ nodeId: n.id });
       const associations = await adapter.getAssociations({ nodeId: n.id });
-      out.push({ ...n, groups, associations });
+      out.push({ ...n, groups, associations, supports: deviceCapabilities(groups) });
     } catch {
-      out.push({ ...n, groups: [], associations: {} });
+      out.push({ ...n, groups: [], associations: {}, supports: [] });
     }
   }
   return out;
@@ -154,7 +156,7 @@ async function main(): Promise<void> {
 
 async function handleState(hub: Hub, res: ServerResponse): Promise<void> {
   const topology = loadTopology(GANGS_FILE);
-  const base = { connection: { url: hub.conn.url, connected: hub.connected, version: hub.version, error: hub.lastError }, profiles: GROUP_PROFILES, groupInfo: GROUP_INFO, topology };
+  const base = { connection: { url: hub.conn.url, connected: hub.connected, version: hub.version, error: hub.lastError }, presets: PRESETS, capabilities: CAPABILITIES, topology };
   let adapter: ZWaveAdapter;
   try {
     adapter = await hub.ensure();

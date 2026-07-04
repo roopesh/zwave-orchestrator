@@ -1,9 +1,7 @@
 # My companion-switch topology. See gangs.example.yaml for the annotated template.
 
 defaults:
-  # Full companion: 2 = Basic Set (tap on/off), 3 = Multilevel Switch Set (level tracks),
-  # 4 = Multilevel Switch Start/Stop (hold to dim).
-  controlGroups: [2, 3, 4]
+  profile: full # on/off + brightness sync + hold-to-dim, resolved per device
 
 gangs:
   - name: Kitchen Ceiling

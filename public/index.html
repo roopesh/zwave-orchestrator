@@ -103,6 +103,15 @@
 
       const nodeLabel = (n) => (n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.product || "#" + n.id}` : "?");
       const nodeById = (id) => (S?.nodes || []).find((n) => n.id === id);
+      const preset = (id) => (S?.presets || []).find((p) => p.id === id);
+      const capTitle = (id) => ((S?.capabilities || []).find((c) => c.id === id) || {}).title || id;
+      const capOrder = () => (S?.capabilities || []).map((c) => c.id);
+      // Effective capabilities for a gang: explicit > profile > defaults > full.
+      function effCaps(g) {
+        const fp = (id) => (preset(id) || {}).capabilities;
+        return g.capabilities || fp(g.profile) || S.topology.defaults.capabilities || fp(S.topology.defaults.profile) || ["onoff", "level", "dim"];
+      }
+      const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
 
       async function api(path, method = "GET", body) {
         const r = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -158,7 +167,7 @@
             const fix = st.issue?.remediation ? `<div class="issue ${st.issue.severity === "warning" ? "warn" : ""}">${esc(st.issue.message)}<div class="fix">→ ${esc(st.issue.remediation)}</div></div>` : "";
             return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
           }).join("");
-          const groups = (g.controlGroups || S.topology.defaults.controlGroups || []).join(" + ");
+          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ");
           return `<div class="card">
             <div class="gang-head">
               <span class="name">${esc(g.name)}</span>
@@ -168,7 +177,7 @@
               <button class="sm" data-apply="${esc(g.name)}">Apply</button>
               <button class="sm ghost" data-teardown="${esc(g.name)}">Teardown</button>
             </div>
-            <div class="sub" style="margin-bottom:6px">Groups: ${groups}</div>
+            <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
             ${comps}
           </div>`;
         }).join("");
@@ -194,23 +203,20 @@
         await loadState();
       }
 
-      // ---- gang editor ----
+      // ---- gang editor (capability-based; no group numbers shown) ----
       function openGangModal(existing) {
         const nodes = (S.nodes || []).filter((n) => !n.isController);
-        const g = existing || { name: "", load: nodes[0]?.id, companions: [], controlGroups: S.topology.defaults.controlGroups.slice() };
+        const g = existing || { name: "", load: nodes[0]?.id, companions: [] };
         const compIds = (g.companions || []).map((c) => (typeof c === "number" ? c : c.node));
-        const sel = new Set(g.controlGroups || S.topology.defaults.controlGroups);
-        const profiles = S.profiles || [];
-        let chosenProfile = profiles.find((p) => p.groups.join() === [...sel].sort().join())?.id || "custom";
+        const caps = new Set(existing ? effCaps(g) : preset("full")?.capabilities || ["onoff", "level", "dim"]);
 
         const opt = (n) => `<option value="${n.id}" ${n.id === g.load ? "selected" : ""}>#${n.id} ${esc(nodeLabel(n))}</option>`;
-        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${compIds.includes(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (LR)" : ""}</label>`;
-        const profRow = (p) => `<div class="profile ${p.id === chosenProfile ? "sel" : ""}" data-profile="${p.id}" data-groups="${p.groups.join(',')}">
-            <div class="t"><input type="radio" name="prof" ${p.id === chosenProfile ? "checked" : ""}/> ${esc(p.label)} <span class="sub">(groups ${p.groups.join("+")})</span>${p.recommended ? ' <span class="chip good">recommended</span>' : ""}</div>
+        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${compIds.includes(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (Long Range)" : ""}</label>`;
+        const presetRow = (p) => `<div class="profile" data-preset="${p.id}" data-caps="${p.capabilities.join(',')}">
+            <div class="t"><input type="radio" name="prof"/> ${esc(p.label)}${p.recommended ? ' <span class="chip good">recommended</span>' : ""}</div>
             <div class="s">${esc(p.summary)}</div>
-            <ul>${p.pros.map((x) => `<li>${esc(x)}</li>`).join("")}${p.cons.map((x) => `<li>⚠ ${esc(x)}</li>`).join("")}</ul>
           </div>`;
-        const customGroups = (S.groupInfo || []).map((gi) => `<label><input type="checkbox" data-cg value="${gi.group}" ${sel.has(gi.group) ? "checked" : ""}/> g${gi.group} ${esc(gi.label)}</label>`).join("");
+        const capRow = (c) => `<label title="${esc(c.description + " — e.g. " + c.example)}"><input type="checkbox" data-cap value="${c.id}"/> ${esc(c.title)}</label>`;
 
         const m = $("#gangModal");
         m.innerHTML = `<form method="dialog">
@@ -221,34 +227,61 @@
             <select id="gLoad">${nodes.map(opt).join("")}</select>
             <label>Companions (remotes that should control the load)</label>
             <div class="checks" id="gComps">${nodes.map(compRow).join("")}</div>
-            <label>What should companions send? (group profile)</label>
-            <div id="gProfiles">${profiles.map(profRow).join("")}
-              <div class="profile ${chosenProfile === "custom" ? "sel" : ""}" data-profile="custom">
-                <div class="t"><input type="radio" name="prof" ${chosenProfile === "custom" ? "checked" : ""}/> Custom</div>
-                <div class="checks" id="gCustom" style="margin-top:8px">${customGroups}</div>
+            <label>What should the companions do?</label>
+            <div id="gPresets">${(S.presets || []).map(presetRow).join("")}
+              <div class="profile" data-preset="custom">
+                <div class="t"><input type="radio" name="prof"/> Custom</div>
+                <div class="checks" style="margin-top:8px">${(S.capabilities || []).map(capRow).join("")}</div>
               </div>
             </div>
+            <div class="issue warn" id="compat" style="display:none"></div>
           </div>
           <div class="modal-f">
-            ${existing ? '<button class="ghost danger" id="gDelete" value="delete">Delete</button>' : ""}
+            ${existing ? '<button class="ghost danger" value="delete">Delete</button>' : ""}
             <div class="spacer" style="flex:1"></div>
             <button class="ghost" value="cancel">Cancel</button>
-            <button class="primary" id="gSave" value="save">Save</button>
+            <button class="primary" value="save">Save</button>
           </div>
         </form>`;
 
-        // profile selection toggles
-        m.querySelectorAll("[data-profile]").forEach((el) => el.addEventListener("click", (e) => {
-          if (e.target.closest("#gCustom")) return;
-          m.querySelectorAll(".profile").forEach((p) => p.classList.remove("sel"));
-          el.classList.add("sel");
-          el.querySelector('input[type=radio]').checked = true;
-          const groups = el.getAttribute("data-groups");
-          if (groups) {
-            const set = new Set(groups.split(",").map(Number));
-            m.querySelectorAll("[data-cg]").forEach((c) => (c.checked = set.has(Number(c.value))));
+        const capBoxes = () => [...m.querySelectorAll("[data-cap]")];
+        const checkedComps = () => [...m.querySelectorAll("[data-comp]:checked")].map((c) => Number(c.value));
+        const syncCapBoxes = () => capBoxes().forEach((b) => (b.checked = caps.has(b.value)));
+
+        function recompute() {
+          const arr = capOrder().filter((id) => caps.has(id));
+          let matched = "custom";
+          for (const p of S.presets || []) if (sameSet(p.capabilities, arr)) matched = p.id;
+          m.querySelectorAll("[data-preset]").forEach((el) => {
+            const on = el.getAttribute("data-preset") === matched;
+            el.classList.toggle("sel", on);
+            const r = el.querySelector("input[type=radio]");
+            if (r) r.checked = on;
+          });
+          const load = Number(m.querySelector("#gLoad").value);
+          const msgs = [];
+          for (const id of checkedComps()) {
+            if (id === load) continue;
+            const n = nodeById(id), sup = new Set(n.supports || []);
+            if (n.isLongRange) { msgs.push(`#${id} ${esc(nodeLabel(n))} is on Long Range — it can't be a companion via association.`); continue; }
+            const lack = arr.filter((c) => !sup.has(c));
+            if (lack.length) msgs.push(`#${id} ${esc(nodeLabel(n))} can't ${lack.map(capTitle).join(", ").toLowerCase()}.`);
           }
+          const box = m.querySelector("#compat");
+          box.style.display = msgs.length ? "block" : "none";
+          box.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
+        }
+
+        syncCapBoxes();
+        recompute();
+        m.querySelectorAll("[data-preset]").forEach((el) => el.addEventListener("click", (e) => {
+          if (e.target.closest("[data-cap]")) return;
+          const ca = el.getAttribute("data-caps");
+          if (ca != null) { caps.clear(); ca.split(",").filter(Boolean).forEach((c) => caps.add(c)); syncCapBoxes(); }
+          recompute();
         }));
+        capBoxes().forEach((b) => b.addEventListener("change", () => { b.checked ? caps.add(b.value) : caps.delete(b.value); recompute(); }));
+        m.querySelectorAll("[data-comp]").forEach((c) => c.addEventListener("change", recompute));
 
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
@@ -256,10 +289,12 @@
           if (m.returnValue === "delete") { await saveGangs((S.topology.gangs || []).filter((x) => x.name !== existing.name)); return; }
           const name = m.querySelector("#gName").value.trim();
           const load = Number(m.querySelector("#gLoad").value);
-          const companions = [...m.querySelectorAll("[data-comp]:checked")].map((c) => Number(c.value)).filter((id) => id !== load);
-          const controlGroups = [...m.querySelectorAll("[data-cg]:checked")].map((c) => Number(c.value)).sort((a, b) => a - b);
-          if (!name || !load || !companions.length || !controlGroups.length) { toast("Name, load, ≥1 companion, ≥1 group required"); return; }
-          const gang = { name, load, companions, controlGroups };
+          const companions = checkedComps().filter((id) => id !== load);
+          const capsArr = capOrder().filter((id) => caps.has(id));
+          if (!name || !load || !companions.length || !capsArr.length) { toast("Need a name, load, ≥1 companion, ≥1 behavior"); return; }
+          const gang = { name, load, companions };
+          const match = (S.presets || []).find((p) => sameSet(p.capabilities, capsArr));
+          if (match) gang.profile = match.id; else gang.capabilities = capsArr;
           const gangs = (S.topology.gangs || []).slice();
           const idx = existing ? gangs.findIndex((x) => x.name === existing.name) : -1;
           if (idx >= 0) gangs[idx] = gang; else gangs.push(gang);
