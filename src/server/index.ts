@@ -15,6 +15,7 @@ import { computePlan, computeStale, computeTeardown, type PlanAction } from "../
 import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies.ts";
+import { discoverGangs } from "../topology/discover.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import type { NodeDump } from "../types.ts";
 
@@ -152,6 +153,7 @@ async function main(): Promise<void> {
       if (path === "/api/teardown" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "remove"));
       if (path === "/api/reconcile" && req.method === "POST") return void (await handleReconcile(hub, res, await readBody(req)));
       if (path === "/api/gangs" && req.method === "POST") return void (await handleSaveGangs(hub, res, await readBody(req)));
+      if (path === "/api/discover" && req.method === "GET") return void (await handleDiscover(hub, res));
       if (path === "/api/params" && req.method === "GET") return void (await handleParams(hub, res));
       if (path === "/api/params/apply" && req.method === "POST") return void (await handleParamsApply(hub, res, await readBody(req)));
       if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
@@ -236,6 +238,13 @@ async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Pro
   let plan: any = { actions: [], issues: [], satisfied: 0 };
   if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc);
   json(res, 200, { ok: true, policies: doc.policies, plan });
+}
+
+async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {
+  const adapter = await hub.ensure();
+  const discovered = await discoverGangs(adapter);
+  const existingLoads = loadTopology(GANGS_FILE).gangs.map((g) => g.load);
+  json(res, 200, { discovered, existingLoads });
 }
 
 async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promise<void> {

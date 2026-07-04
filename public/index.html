@@ -99,6 +99,7 @@
           <h2 style="margin:0">Gangs</h2>
           <div class="row">
             <button class="sm" id="btnSyncAll" title="Add missing links and remove any not in your setup">Sync all</button>
+            <button class="sm" id="btnDiscover" title="Reverse-engineer gangs from your existing associations">Import from mesh</button>
             <button class="primary sm" id="btnNewGang">+ New gang</button>
           </div>
         </div>
@@ -125,6 +126,7 @@
 
     <dialog id="gangModal"></dialog>
     <dialog id="policyModal"></dialog>
+    <dialog id="discoverModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -374,6 +376,57 @@
         await loadState();
       }
 
+      // ---- import gangs from existing associations ----
+      async function openDiscover() {
+        toast("Scanning mesh…");
+        const { discovered, existingLoads } = await api("/api/discover");
+        const existing = new Set(existingLoads || []);
+        const m = $("#discoverModal");
+        if (!discovered.length) {
+          m.innerHTML = `<form method="dialog"><div class="modal-h">Import from mesh</div><div class="modal-b"><div class="empty">No companion associations found on the mesh to import.</div></div><div class="modal-f"><button class="primary" value="cancel">Close</button></div></form>`;
+          m.showModal();
+          return;
+        }
+        const row = (d, i) => {
+          const isEx = existing.has(d.load);
+          const comps = d.companions.map((id) => `#${id} ${esc(nodeLabel(nodeById(id)))}`).join(", ");
+          const behaviors = d.capabilities.map(capTitle).join(" · ") || "—";
+          return `<div class="card" style="margin-bottom:8px">
+            <label style="display:flex; gap:8px; align-items:center; color:var(--ink); margin:0">
+              <input type="checkbox" data-imp="${i}" ${isEx ? "" : "checked"} style="width:auto"/>
+              <b>${esc(d.name)}</b> ${isEx ? '<span class="chip">already added</span>' : '<span class="chip good">new</span>'}
+            </label>
+            <div class="sub" style="margin-top:6px">Load #${d.load} · companions: ${comps}</div>
+            <div class="sub">Behaviors: ${behaviors}</div>
+          </div>`;
+        };
+        m.innerHTML = `<form method="dialog">
+          <div class="modal-h">Import gangs from your existing wiring</div>
+          <div class="modal-b">
+            <div class="sub" style="margin-bottom:10px">Found ${discovered.length} gang(s) in your live associations. Pick which to add to gangs.yaml — you can rename and tune them afterward.</div>
+            ${discovered.map(row).join("")}
+          </div>
+          <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="import">Import selected</button></div>
+        </form>`;
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue !== "import") return;
+          const chosen = [...m.querySelectorAll("[data-imp]:checked")].map((c) => discovered[Number(c.dataset.imp)]);
+          if (!chosen.length) { toast("Nothing selected"); return; }
+          const gangs = (S.topology.gangs || []).slice();
+          for (const d of chosen) {
+            const gang = { name: d.name, load: d.load, companions: d.companions };
+            const match = (S.presets || []).find((p) => sameSet(p.capabilities, d.capabilities));
+            if (match) gang.profile = match.id; else if (d.capabilities.length) gang.capabilities = d.capabilities;
+            const idx = gangs.findIndex((g) => g.load === d.load);
+            if (idx >= 0) gangs[idx] = gang; else gangs.push(gang);
+          }
+          await saveGangs(gangs);
+          toast(`Imported ${chosen.length} gang(s)`);
+        });
+        m.showModal();
+      }
+
       // ---- settings ----
       function openSettings() {
         const c = S.connection;
@@ -553,6 +606,7 @@
       $("#btnRefresh").onclick = async () => { await loadState(); if (P) await loadParams(); };
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
+      $("#btnDiscover").onclick = openDiscover;
       $("#btnSyncAll").onclick = () => doWrite("sync", {});
       $("#gangs").addEventListener("click", (e) => {
         const t = e.target.closest("button"); if (!t) return;
