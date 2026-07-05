@@ -721,9 +721,16 @@
           box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); }));
         }
         function updateNote() {
+          const onMesh = new Set((P.nodes || []).map((n) => n.id));
+          const gone = [...targets].filter((id) => !onMesh.has(id));
           const msgs = [];
-          for (const s of settings) { const lack = [...targets].filter((id) => !(P.params[id] || []).some((p) => p.param === s.param)); if (lack.length) { const def = paramDefAny(s.param, [...targets]); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); } }
+          if (gone.length) msgs.push(`${gone.map((id) => "#" + id).join(", ")} ${gone.length > 1 ? "are" : "is"} no longer on the mesh.<button type="button" class="sm" id="pRmGone" style="margin-left:8px; padding:1px 8px">Remove from policy</button>`);
+          for (const s of settings) {
+            const lack = [...targets].filter((id) => onMesh.has(id) && !(P.params[id] || []).some((p) => p.param === s.param));
+            if (lack.length) { const def = paramDefAny(s.param, [...targets]); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
+          }
           const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
+          const rm = m.querySelector("#pRmGone"); if (rm) rm.onclick = () => { for (const id of gone) targets.delete(id); paintTargets(); updateNote(); };
         }
 
         function paintTargets() {
