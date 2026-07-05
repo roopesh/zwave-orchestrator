@@ -29,6 +29,17 @@ test("discovery suppresses reverse/broadcast links (no phantom gangs)", async ()
   assert.deepEqual(gangs[0].companions, [3, 4]);
 });
 
+test("discovery handles a symmetric LED-synced pair without a phantom gang", async () => {
+  const a = new MockAdapter([
+    { id: 1, isController: true },
+    { id: 11, name: "Island", location: "Kitchen", assoc: { 3: [{ nodeId: 14 }] } }, // load broadcasts level to companion (LED sync)
+    { id: 14, name: "Island Remote", location: "Family Room", assoc: wired(11) }, // companion sends full control
+  ]);
+  const gangs = await discoverGangs(a);
+  assert.deepEqual(gangs.map((g) => g.load), [11], "companion #14 must not become a phantom load");
+  assert.deepEqual(gangs[0].companions, [14]);
+});
+
 test("discovery ignores Long Range nodes", async () => {
   const a = new MockAdapter([
     { id: 1, isController: true },

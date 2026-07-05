@@ -62,11 +62,19 @@ export async function discoverGangs(adapter: AssociationTransport): Promise<Disc
     inSources.get(e.target)!.add(e.source);
   }
   const deg = (id: number) => inSources.get(id)?.size ?? 0;
+  const edgeCap = new Map<string, number>();
+  for (const e of edges) edgeCap.set(`${e.source}|${e.target}`, e.caps.size);
 
-  // Pass 2: keep an edge as companion→load only when the source isn't a "bigger" load than the target.
+  // Pass 2: for each edge S→T (S=companion of load T), keep it unless the reverse edge is the
+  // "better" companion→load. Decide by in-degree (a load has more distinct sources), then by
+  // capability count (a companion sends full control; a load only broadcasts level back for LED
+  // sync, so it sends fewer), then by id — so a symmetric LED-synced pair yields one gang, not two.
   const loads = new Map<number, Map<number, Set<CapabilityId>>>();
   for (const e of edges) {
-    if (deg(e.source) > deg(e.target)) continue; // reverse / broadcast link
+    const dS = deg(e.source), dT = deg(e.target);
+    const cS = e.caps.size, cT = edgeCap.get(`${e.target}|${e.source}`) ?? 0;
+    const keep = dS !== dT ? dS < dT : cS !== cT ? cS > cT : e.source < e.target;
+    if (!keep) continue;
     if (!loads.has(e.target)) loads.set(e.target, new Map());
     loads.get(e.target)!.set(e.source, e.caps);
   }
