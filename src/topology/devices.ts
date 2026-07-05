@@ -6,6 +6,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parse, stringify } from "yaml";
 import type { ZNode } from "../types.ts";
+import type { Topology } from "./gangs.ts";
+import type { PolicyDoc } from "./policies.ts";
 
 export type Disposition = "adopted" | "ignored";
 
@@ -89,4 +91,17 @@ export function analyzeDevices(nodes: NodeWithSupport[], registry: DeviceRegistr
   }
 
   return { status, removed, repairCandidates };
+}
+
+/** Re-pair remap: point every reference to `from` at `to` across gangs, policies, and the
+ *  registry (in place). Used when a device was excluded and re-included under a new node id. */
+export function remapNodeId(from: number, to: number, newFingerprint: string, topo: Topology, policies: PolicyDoc, registry: DeviceRegistry): void {
+  for (const g of topo.gangs) {
+    if (g.load === from) g.load = to;
+    g.companions = g.companions.map((c) => (c.node === from ? { ...c, node: to } : c));
+  }
+  for (const p of policies.policies) p.targets = p.targets.map((t) => (t === from ? to : t));
+  const old = registry.devices.find((d) => d.id === from);
+  registry.devices = registry.devices.filter((d) => d.id !== from && d.id !== to);
+  registry.devices.push({ id: to, fingerprint: newFingerprint, disposition: old?.disposition ?? "adopted" });
 }

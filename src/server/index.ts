@@ -16,7 +16,7 @@ import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies.ts";
 import { discoverGangs } from "../topology/discover.ts";
-import { analyzeDevices, loadDevices, saveDevices } from "../topology/devices.ts";
+import { analyzeDevices, fingerprintOf, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import type { NodeDump } from "../types.ts";
 
@@ -157,6 +157,7 @@ async function main(): Promise<void> {
       if (path === "/api/params/apply" && req.method === "POST") return void (await handleParamsApply(hub, res, await readBody(req)));
       if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
       if (path === "/api/devices" && req.method === "POST") return void (await handleSaveDevices(res, await readBody(req)));
+      if (path === "/api/remap" && req.method === "POST") return void (await handleRemap(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
       if (path.startsWith("/api/")) return void json(res, 404, { error: "unknown endpoint" });
@@ -240,6 +241,21 @@ async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Pro
   let plan: any = { actions: [], issues: [], satisfied: 0 };
   if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc);
   json(res, 200, { ok: true, policies: doc.policies, plan });
+}
+
+async function handleRemap(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const from = Number(body?.from), to = Number(body?.to);
+  if (!from || !to) return void json(res, 400, { error: "expected { from, to }" });
+  const adapter = await hub.ensure();
+  const newNode = (await adapter.getNodes()).find((n) => n.id === to);
+  const topo = loadTopology(GANGS_FILE);
+  const policies = loadPolicies(POLICIES_FILE);
+  const registry = loadDevices(DEVICES_FILE);
+  remapNodeId(from, to, newNode ? fingerprintOf(newNode) : "", topo, policies, registry);
+  saveTopology(GANGS_FILE, topo);
+  savePolicies(POLICIES_FILE, policies);
+  saveDevices(DEVICES_FILE, registry);
+  json(res, 200, { ok: true, from, to });
 }
 
 async function handleSaveDevices(res: ServerResponse, body: any): Promise<void> {

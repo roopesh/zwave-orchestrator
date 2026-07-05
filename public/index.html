@@ -180,14 +180,25 @@
       function renderDeviceInbox() {
         const el = $("#deviceInbox");
         const newOnes = (S.nodes || []).filter((n) => !n.isController && n.device?.disposition === "new");
+        const repairs = S.deviceChanges?.repairCandidates || [];
         const btn = $("#btnDevices");
         if (btn) btn.textContent = newOnes.length ? `Devices · ${newOnes.length} new` : "Devices";
         if (!el) return;
-        el.innerHTML = newOnes.length
-          ? `<div class="card" style="border-color:rgba(90,169,255,.4)"><b>${newOnes.length} new device(s)</b> on the mesh. Choose which belong in your gangs.<div style="margin-top:10px"><button class="primary sm" id="btnReviewDevices">Review devices</button></div></div>`
-          : "";
+        let html = "";
+        if (newOnes.length) html += `<div class="card" style="border-color:rgba(90,169,255,.4)"><b>${newOnes.length} new device(s)</b> on the mesh. Choose which belong in your gangs.<div style="margin-top:10px"><button class="primary sm" id="btnReviewDevices">Review devices</button></div></div>`;
+        for (const rc of repairs) {
+          html += `<div class="card" style="border-color:rgba(230,182,76,.45)"><b>Re-paired device?</b> <span class="sub">#${rc.from.id} is gone and #${rc.to} appeared with the same name & product.</span><div style="margin-top:10px"><button class="sm" data-remap="${rc.from.id}:${rc.to}">Remap #${rc.from.id} → #${rc.to} (updates gangs, policies, adoption)</button></div></div>`;
+        }
+        el.innerHTML = html;
         const r = document.getElementById("btnReviewDevices");
         if (r) r.onclick = openDeviceManager;
+        el.querySelectorAll("[data-remap]").forEach((b) => (b.onclick = async () => {
+          const [from, to] = b.dataset.remap.split(":").map(Number);
+          toast("Remapping…");
+          await api("/api/remap", "POST", { from, to });
+          toast(`Remapped #${from} → #${to}`);
+          await loadState();
+        }));
       }
 
       function openDeviceManager() {

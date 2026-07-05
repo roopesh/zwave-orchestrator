@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { analyzeDevices, fingerprintOf, loadDevices, saveDevices } from "../topology/devices.ts";
+import { analyzeDevices, fingerprintOf, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 
 const node = (id: number, over: any = {}) => ({ id, name: "", location: "", product: "Inovelli VZW31-SN", isController: false, isLongRange: false, supports: ["onoff", "level", "dim"], ...over });
 
@@ -45,6 +45,23 @@ test("detects removed devices and re-pair candidates by fingerprint", () => {
   assert.equal(removed[0].id, 12);
   assert.equal(repairCandidates.length, 1);
   assert.deepEqual({ from: repairCandidates[0].from.id, to: repairCandidates[0].to }, { from: 12, to: 40 });
+});
+
+test("remapNodeId repoints gangs, policies, and the registry", () => {
+  const topo: any = { defaults: {}, gangs: [{ name: "K", load: 6, companions: [{ node: 12 }, { node: 5 }] }] };
+  const policies: any = { policies: [{ name: "P", targets: [12, 6], settings: [{ param: 1, value: 0 }] }] };
+  const registry: any = { devices: [{ id: 12, fingerprint: "old", disposition: "ignored" }] };
+  remapNodeId(12, 40, "new-fp", topo, policies, registry);
+  assert.deepEqual(topo.gangs[0].companions.map((c: any) => c.node), [40, 5]);
+  assert.deepEqual(policies.policies[0].targets, [40, 6]);
+  assert.equal(registry.devices.find((d: any) => d.id === 12), undefined);
+  assert.deepEqual(registry.devices.find((d: any) => d.id === 40), { id: 40, fingerprint: "new-fp", disposition: "ignored" });
+});
+
+test("remapNodeId repoints a load", () => {
+  const topo: any = { defaults: {}, gangs: [{ name: "K", load: 12, companions: [{ node: 5 }] }] };
+  remapNodeId(12, 40, "fp", topo, { policies: [] }, { devices: [] });
+  assert.equal(topo.gangs[0].load, 40);
 });
 
 test("registry round-trips through yaml", () => {
