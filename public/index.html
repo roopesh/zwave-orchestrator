@@ -296,7 +296,7 @@
         const caps = new Set(existing ? effCaps(g) : preset("full")?.capabilities || ["onoff", "level", "dim"]);
 
         const opt = (n) => `<option value="${n.id}" ${n.id === g.load ? "selected" : ""}>#${n.id} ${esc(nodeLabel(n))}</option>`;
-        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${checked.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (Long Range)" : ""}</label>`;
+        const compRow = (n) => `<label><input type="checkbox" data-comp value="${n.id}" ${checked.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(nodeLabel(n))}${n.isLongRange ? " (Long Range)" : ""}${n.device?.disposition === "new" ? ' <span class="badge">new</span>' : ""}</label>`;
         const presetRow = (p) => `<div class="profile" data-preset="${p.id}" data-caps="${p.capabilities.join(',')}">
             <div class="t"><input type="radio" name="prof"/> ${esc(p.label)}${p.recommended ? ' <span class="chip good">recommended</span>' : ""}</div>
             <div class="s">${esc(p.summary)}</div>
@@ -311,7 +311,9 @@
             <label>Load switch (the one wired to the fixture)</label>
             <select id="gLoad">${nodes.map(opt).join("")}</select>
             <label>Companions (remotes that should control the load)</label>
-            <div class="checks" id="gComps"></div>
+            <input id="gCompSearch" placeholder="Search by name, room, model, #id…" style="margin-bottom:6px"/>
+            <label style="display:flex; gap:6px; align-items:center; font-size:12px; color:var(--muted); margin:0 0 6px"><input type="checkbox" id="gShowAll" style="width:auto"/> show all devices (not just group-eligible)</label>
+            <div id="gComps"></div>
             <label>What should the companions do?</label>
             <div id="gPresets">${(S.presets || []).map(presetRow).join("")}
               <div class="profile" data-preset="custom">
@@ -340,7 +342,16 @@
           const load = Number(m.querySelector("#gLoad").value);
           checked.delete(load);
           const box = m.querySelector("#gComps");
-          box.innerHTML = nodes.filter((n) => n.id !== load).map(compRow).join("");
+          const q = (m.querySelector("#gCompSearch")?.value || "").toLowerCase();
+          const showAll = m.querySelector("#gShowAll")?.checked;
+          const list = nodes.filter((n) => n.id !== load
+            && (showAll || (n.device ? n.device.groupEligible : true))
+            && (!q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q)));
+          const byRoom = {};
+          for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
+          box.innerHTML = Object.keys(byRoom).sort().map((room) =>
+            `<div style="margin-top:6px"><div class="sub" style="font-weight:600">${esc(room)}</div><div class="checks">${byRoom[room].map(compRow).join("")}</div></div>`
+          ).join("") || `<div class="sub" style="margin-top:6px">No matching devices.</div>`;
           box.querySelectorAll("[data-comp]").forEach((c) => c.addEventListener("change", () => {
             c.checked ? checked.add(Number(c.value)) : checked.delete(Number(c.value));
             recompute();
@@ -375,6 +386,8 @@
         paintComps();
         recompute();
         m.querySelector("#gLoad").addEventListener("change", () => { paintComps(); recompute(); });
+        m.querySelector("#gCompSearch").addEventListener("input", paintComps);
+        m.querySelector("#gShowAll").addEventListener("change", paintComps);
         m.querySelectorAll("[data-preset]").forEach((el) => el.addEventListener("click", (e) => {
           if (e.target.closest("[data-cap]")) return;
           const ca = el.getAttribute("data-caps");
