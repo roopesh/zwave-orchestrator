@@ -675,7 +675,8 @@
           <div class="modal-b">
             <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : esc(seedName)}" placeholder="e.g. Inovelli defaults" />
             <label>Apply to devices</label>
-            <div class="checks" id="pTargets">${nodes.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div>
+            <input id="pSearch" placeholder="Search by model, name, room, #id…" style="margin-bottom:6px"/>
+            <div id="pTargets"></div>
             ${existing ? "" : `<label>Prefill settings from a device (optional)</label><select id="pSeed"><option value="">— snapshot a well-configured switch —</option>${nodes.map((n) => `<option value="${n.id}">#${n.id} ${esc(pLabel(n))}</option>`).join("")}</select>`}
             <label>Settings (pick a parameter and the value you want)</label>
             <div id="pSettings"></div>
@@ -714,18 +715,32 @@
           const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
         }
 
-        paintSettings(); updateNote();
+        function paintTargets() {
+          const q = (m.querySelector("#pSearch")?.value || "").toLowerCase();
+          const list = nodes.filter((n) => !q || `#${n.id} ${n.location} ${n.name} ${n.model}`.toLowerCase().includes(q));
+          const byModel = {};
+          for (const n of list) (byModel[n.model || "Unknown"] ??= []).push(n);
+          const box = m.querySelector("#pTargets");
+          box.innerHTML = Object.keys(byModel).sort().map((model) => {
+            const ns = byModel[model];
+            return `<div style="margin-top:6px"><div class="row" style="gap:8px"><span class="sub" style="font-weight:600">${esc(model)} (${ns.length})</span><button type="button" class="sm ghost" data-selall="${esc(model)}" style="padding:1px 8px">select all</button></div><div class="checks">${ns.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div></div>`;
+          }).join("") || `<div class="sub" style="margin-top:6px">No matching devices.</div>`;
+          box.querySelectorAll("[data-tgt]").forEach((c) => c.addEventListener("change", () => { c.checked ? targets.add(Number(c.value)) : targets.delete(Number(c.value)); paintSettings(); updateNote(); }));
+          box.querySelectorAll("[data-selall]").forEach((b) => b.addEventListener("click", () => { const model = b.dataset.selall; for (const n of nodes) if ((n.model || "Unknown") === model) targets.add(n.id); paintTargets(); paintSettings(); updateNote(); }));
+        }
+
+        paintTargets(); paintSettings(); updateNote();
+        m.querySelector("#pSearch").addEventListener("input", paintTargets);
         const seedSel = m.querySelector("#pSeed");
         if (seedSel) seedSel.addEventListener("change", () => {
           const id = Number(seedSel.value); if (!id) return;
           targets.add(id);
-          const tc = m.querySelector(`[data-tgt][value="${id}"]`); if (tc) tc.checked = true;
+          paintTargets();
           settings.length = 0;
           for (const p of P.params[id] || []) if (p.writeable && p.value != null && p.default != null && p.value !== p.default) settings.push({ param: p.param, value: p.value });
           paintSettings(); updateNote();
           toast(`Loaded ${settings.length} customized setting(s) from #${id}`);
         });
-        m.querySelectorAll("[data-tgt]").forEach((c) => c.addEventListener("change", () => { c.checked ? targets.add(Number(c.value)) : targets.delete(Number(c.value)); paintSettings(); updateNote(); }));
         m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; settings.push({ param: a ? a.param : 1, value: a ? (a.default ?? a.options?.[0]?.value ?? 0) : 0 }); paintSettings(); updateNote(); });
 
         m.addEventListener("close", async function onClose() {
