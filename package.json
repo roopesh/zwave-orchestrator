@@ -46,7 +46,8 @@
     "start": "node dist/server.js",
     "build": "esbuild server=src/server/index.ts cli=src/cli.ts --bundle --platform=node --format=esm --outdir=dist --packages=external",
     "prepublishOnly": "npm run build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/test/*.test.ts"
   },
   "dependencies": {
     "yaml": "^2.5.0"
