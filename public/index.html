@@ -771,7 +771,22 @@
       }
 
       // ---- events ----
-      $("#btnRefresh").onclick = async () => { await loadState(); if (P) await loadParams(); };
+      $("#btnRefresh").onclick = async () => {
+        const btn = $("#btnRefresh");
+        btn.textContent = "Refreshing…"; btn.disabled = true;
+        try {
+          toast("Refreshing from the controller…");
+          await loadState();
+          if (P) await loadParams();
+          const newOnes = (S.nodes || []).filter((n) => !n.isController && n.device?.disposition === "new");
+          if (newOnes.length) { toast(`Refreshed — ${newOnes.length} new device(s) to review`); openDeviceManager(); }
+          else toast("Refreshed ✓");
+        } catch (e) {
+          toast("Refresh failed: " + (e?.message || e));
+        } finally {
+          btn.textContent = "Refresh"; btn.disabled = false;
+        }
+      };
       $("#btnDevices").onclick = openDeviceManager;
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
