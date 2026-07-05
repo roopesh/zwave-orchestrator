@@ -16,6 +16,7 @@ import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies.ts";
 import { discoverGangs } from "../topology/discover.ts";
+import { analyzeDevices, loadDevices, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import type { NodeDump } from "../types.ts";
 
@@ -24,6 +25,7 @@ type UiNode = NodeDump & { supports: string[] };
 const PORT = Number(process.env.PORT ?? 8090);
 const GANGS_FILE = process.env.GANGS_FILE ?? "gangs.yaml";
 const POLICIES_FILE = process.env.POLICIES_FILE ?? "policies.yaml";
+const DEVICES_FILE = process.env.DEVICES_FILE ?? "devices.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
 
 // Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
@@ -154,6 +156,7 @@ async function main(): Promise<void> {
       if (path === "/api/params" && req.method === "GET") return void (await handleParams(hub, res));
       if (path === "/api/params/apply" && req.method === "POST") return void (await handleParamsApply(hub, res, await readBody(req)));
       if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
+      if (path === "/api/devices" && req.method === "POST") return void (await handleSaveDevices(res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
       if (path.startsWith("/api/")) return void json(res, 404, { error: "unknown endpoint" });
@@ -175,11 +178,13 @@ async function handleState(hub: Hub, res: ServerResponse): Promise<void> {
   try {
     adapter = await hub.ensure();
   } catch {
-    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0 }, stale: [] });
+    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0 }, stale: [], deviceChanges: { removed: [], repairCandidates: [] } });
     return;
   }
   const [nodes, plan, stale] = [await buildNodes(adapter), await computePlan(adapter, topology), await computeStale(adapter, topology)];
-  json(res, 200, { ...base, connection: { ...base.connection, connected: true }, nodes, plan, stale: stale.actions });
+  const analysis = analyzeDevices(nodes, loadDevices(DEVICES_FILE));
+  const nodesOut = nodes.map((n) => ({ ...n, device: analysis.status[n.id] }));
+  json(res, 200, { ...base, connection: { ...base.connection, connected: true }, nodes: nodesOut, plan, stale: stale.actions, deviceChanges: { removed: analysis.removed, repairCandidates: analysis.repairCandidates } });
 }
 
 async function handleWrite(hub: Hub, res: ServerResponse, body: any, mode: "add" | "remove"): Promise<void> {
@@ -235,6 +240,12 @@ async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Pro
   let plan: any = { actions: [], issues: [], satisfied: 0 };
   if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc);
   json(res, 200, { ok: true, policies: doc.policies, plan });
+}
+
+async function handleSaveDevices(res: ServerResponse, body: any): Promise<void> {
+  if (!Array.isArray(body?.devices)) return void json(res, 400, { error: "expected { devices: [...] }" });
+  saveDevices(DEVICES_FILE, { devices: body.devices });
+  json(res, 200, { ok: true, devices: body.devices });
 }
 
 async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {

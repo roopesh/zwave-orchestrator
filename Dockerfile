@@ -14,7 +14,8 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8090 \
     GANGS_FILE=/data/gangs.yaml \
-    POLICIES_FILE=/data/policies.yaml
+    POLICIES_FILE=/data/policies.yaml \
+    DEVICES_FILE=/data/devices.yaml
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
