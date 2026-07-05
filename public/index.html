@@ -84,6 +84,7 @@
       <span class="sub" id="homeid"></span>
       <div class="spacer"></div>
       <div class="status"><span class="dot" id="dot"></span><span id="connText">connecting…</span></div>
+      <button class="ghost sm" id="btnDevices">Devices</button>
       <button class="ghost sm" id="btnRefresh">Refresh</button>
       <button class="ghost sm" id="btnSettings">Settings</button>
     </header>
@@ -103,6 +104,7 @@
             <button class="primary sm" id="btnNewGang">+ New gang</button>
           </div>
         </div>
+        <div id="deviceInbox"></div>
         <div id="removedBanner"></div>
         <div id="gangs"></div>
 
@@ -129,6 +131,7 @@
     <dialog id="gangModal"></dialog>
     <dialog id="policyModal"></dialog>
     <dialog id="discoverModal"></dialog>
+    <dialog id="deviceModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -138,6 +141,8 @@
 
       const nodeLabel = (n) => (n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.product || "#" + n.id}` : "?");
       const nodeById = (id) => (S?.nodes || []).find((n) => n.id === id);
+      // Must match the server's fingerprintOf (product|location|name).
+      const fingerprintOf = (n) => [n.product || "", n.location || "", n.name || ""].join("|");
       const preset = (id) => (S?.presets || []).find((p) => p.id === id);
       const capTitle = (id) => ((S?.capabilities || []).find((c) => c.id === id) || {}).title || id;
       const capOrder = () => (S?.capabilities || []).map((c) => c.id);
@@ -165,9 +170,73 @@
       function render() {
         renderConn();
         renderBanner();
+        renderDeviceInbox();
         renderRemoved();
         renderGangs();
         renderNodes();
+      }
+
+      // Surface untriaged ("new") devices and keep the Devices button's new-count fresh.
+      function renderDeviceInbox() {
+        const el = $("#deviceInbox");
+        const newOnes = (S.nodes || []).filter((n) => !n.isController && n.device?.disposition === "new");
+        const btn = $("#btnDevices");
+        if (btn) btn.textContent = newOnes.length ? `Devices · ${newOnes.length} new` : "Devices";
+        if (!el) return;
+        el.innerHTML = newOnes.length
+          ? `<div class="card" style="border-color:rgba(90,169,255,.4)"><b>${newOnes.length} new device(s)</b> on the mesh. Choose which belong in your gangs.<div style="margin-top:10px"><button class="primary sm" id="btnReviewDevices">Review devices</button></div></div>`
+          : "";
+        const r = document.getElementById("btnReviewDevices");
+        if (r) r.onclick = openDeviceManager;
+      }
+
+      function openDeviceManager() {
+        const nodes = (S.nodes || []).filter((n) => !n.isController);
+        const disp = new Map(nodes.map((n) => [n.id, n.device?.disposition || "new"]));
+        const m = $("#deviceModal");
+        const dispRow = (n) => {
+          const d = disp.get(n.id);
+          return `<div class="comp"><div class="who">#${n.id} ${esc(nodeLabel(n))}${d === "new" ? ' <span class="badge">new</span>' : ""}</div>
+            <select data-disp="${n.id}" style="width:170px; flex:0 0 auto">
+              <option value="adopted" ${d === "adopted" ? "selected" : ""}>In groups</option>
+              <option value="ignored" ${d === "ignored" ? "selected" : ""}>Ignored</option>
+              ${d === "new" ? '<option value="new" selected>New (untriaged)</option>' : ""}
+            </select></div>`;
+        };
+        const paint = () => {
+          const q = (m.querySelector("#dmSearch")?.value || "").toLowerCase();
+          const list = nodes.filter((n) => !q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q));
+          const byRoom = {};
+          for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
+          m.querySelector("#dmBody").innerHTML = Object.keys(byRoom).sort().map((room) =>
+            `<div style="margin-top:8px"><div class="sub" style="font-weight:600">${esc(room)}</div>${byRoom[room].map(dispRow).join("")}</div>`
+          ).join("") || `<div class="sub" style="margin-top:8px">No matching devices.</div>`;
+          m.querySelectorAll("[data-disp]").forEach((s) => s.addEventListener("change", () => disp.set(Number(s.dataset.disp), s.value)));
+        };
+        m.innerHTML = `<form method="dialog">
+          <div class="modal-h">Devices</div>
+          <div class="modal-b">
+            <div class="sub" style="margin-bottom:8px">Choose which devices belong in the Groups UI. New switches default to “in groups”; ignored devices are hidden from the gang builder. (Parameters apply to all devices regardless.)</div>
+            <input id="dmSearch" placeholder="Search…" style="margin-bottom:6px"/>
+            <div class="row" style="gap:8px; margin-bottom:4px"><button type="button" class="sm" id="dmAdoptNew">Adopt all new</button><button type="button" class="sm ghost" id="dmIgnoreNew">Ignore all new</button></div>
+            <div id="dmBody"></div>
+          </div>
+          <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save</button></div>
+        </form>`;
+        paint();
+        m.querySelector("#dmSearch").addEventListener("input", paint);
+        m.querySelector("#dmAdoptNew").addEventListener("click", () => { for (const n of nodes) if (disp.get(n.id) === "new") disp.set(n.id, "adopted"); paint(); });
+        m.querySelector("#dmIgnoreNew").addEventListener("click", () => { for (const n of nodes) if (disp.get(n.id) === "new") disp.set(n.id, "ignored"); paint(); });
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue !== "save") return;
+          const devices = [];
+          for (const n of nodes) { const d = disp.get(n.id); if (d === "adopted" || d === "ignored") devices.push({ id: n.id, fingerprint: fingerprintOf(n), disposition: d }); }
+          await api("/api/devices", "POST", { devices });
+          toast("Saved device settings");
+          await loadState();
+        });
+        m.showModal();
       }
 
       // Surface gang references to devices no longer on the mesh, with one-click cleanup.
@@ -677,6 +746,7 @@
 
       // ---- events ----
       $("#btnRefresh").onclick = async () => { await loadState(); if (P) await loadParams(); };
+      $("#btnDevices").onclick = openDeviceManager;
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
       $("#btnDiscover").onclick = openDiscover;
