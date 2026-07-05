@@ -78,21 +78,18 @@ class Hub {
 
 async function buildNodes(adapter: ZWaveAdapter): Promise<UiNode[]> {
   const nodes = await adapter.getNodes();
-  const out: UiNode[] = [];
-  for (const n of nodes) {
-    if (n.isController) {
-      out.push({ ...n, groups: [], associations: {}, supports: [] });
-      continue;
-    }
-    try {
-      const groups = await adapter.getAssociationGroups({ nodeId: n.id });
-      const associations = await adapter.getAssociations({ nodeId: n.id });
-      out.push({ ...n, groups, associations, supports: deviceCapabilities(groups) });
-    } catch {
-      out.push({ ...n, groups: [], associations: {}, supports: [] });
-    }
-  }
-  return out;
+  // Read every node's groups + associations in parallel (was sequential — the main cost at scale).
+  return Promise.all(
+    nodes.map(async (n): Promise<UiNode> => {
+      if (n.isController) return { ...n, groups: [], associations: {}, supports: [] };
+      try {
+        const [groups, associations] = await Promise.all([adapter.getAssociationGroups({ nodeId: n.id }), adapter.getAssociations({ nodeId: n.id })]);
+        return { ...n, groups, associations, supports: deviceCapabilities(groups) };
+      } catch {
+        return { ...n, groups: [], associations: {}, supports: [] };
+      }
+    }),
+  );
 }
 
 function filterActions(actions: PlanAction[], body: any): PlanAction[] {

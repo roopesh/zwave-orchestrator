@@ -47,18 +47,20 @@ const isLinkedTo = (list: { nodeId: number; endpoint?: number }[] | undefined, t
   (list ?? []).some((t) => t.nodeId === target && (t.endpoint ?? 0) === 0);
 
 function makeReader(adapter: AssociationTransport) {
-  const groupCache = new Map<number, Awaited<ReturnType<AssociationTransport["getAssociationGroups"]>>>();
-  const assocCache = new Map<number, Awaited<ReturnType<AssociationTransport["getAssociations"]>>>();
-  return {
-    async groupsOf(id: number) {
-      if (!groupCache.has(id)) groupCache.set(id, await adapter.getAssociationGroups({ nodeId: id }));
-      return groupCache.get(id)!;
-    },
-    async assocOf(id: number) {
-      if (!assocCache.has(id)) assocCache.set(id, await adapter.getAssociations({ nodeId: id }));
-      return assocCache.get(id)!;
-    },
+  // Cache promises (not resolved values) so concurrent reads of the same node share one round-trip.
+  const groupCache = new Map<number, ReturnType<AssociationTransport["getAssociationGroups"]>>();
+  const assocCache = new Map<number, ReturnType<AssociationTransport["getAssociations"]>>();
+  const groupsOf = (id: number) => {
+    if (!groupCache.has(id)) groupCache.set(id, adapter.getAssociationGroups({ nodeId: id }));
+    return groupCache.get(id)!;
   };
+  const assocOf = (id: number) => {
+    if (!assocCache.has(id)) assocCache.set(id, adapter.getAssociations({ nodeId: id }));
+    return assocCache.get(id)!;
+  };
+  /** Warm the cache for many nodes in parallel — avoids N sequential round-trips at scale. */
+  const prefetch = (ids: number[]) => Promise.all(ids.flatMap((id) => [groupsOf(id), assocOf(id)]));
+  return { groupsOf, assocOf, prefetch };
 }
 
 /** Resolve the concrete group ids to wire on a companion (explicit override, else by capability).
@@ -102,6 +104,7 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
+  await read.prefetch(nodes.filter((n) => !n.isController && !n.isLongRange).map((n) => n.id));
   const actions: PlanAction[] = [];
   const issues: PlanIssue[] = [];
   let satisfied = 0;
@@ -179,6 +182,7 @@ export async function computeTeardown(adapter: AssociationTransport, topo: Topol
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
+  await read.prefetch(nodes.filter((n) => !n.isController && !n.isLongRange).map((n) => n.id));
   const actions: PlanAction[] = [];
   const issues: PlanIssue[] = [];
 
@@ -220,6 +224,7 @@ export async function computeStale(adapter: AssociationTransport, topo: Topology
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
+  await read.prefetch(nodes.filter((n) => !n.isController && !n.isLongRange).map((n) => n.id));
   const actions: PlanAction[] = [];
 
   // Managed loads + the desired directed control links: `${source}|${group}|${target}`.
