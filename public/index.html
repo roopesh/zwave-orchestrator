@@ -76,6 +76,11 @@
       .setline { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; }
       .setline select { flex: 1; }
       .setline button { padding: 4px 9px; }
+      .devrow { display: flex; align-items: center; gap: 8px; padding: 5px 2px; border-top: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+      .devrow input { width: auto; flex: 0 0 auto; }
+      .devrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .fchip { cursor: pointer; }
+      .fchip.sel { color: var(--accent); border-color: var(--accent); background: rgba(90,169,255,.08); }
     </style>
   </head>
   <body>
@@ -205,39 +210,56 @@
         const nodes = (S.nodes || []).filter((n) => !n.isController);
         const disp = new Map(nodes.map((n) => [n.id, n.device?.disposition || "new"]));
         const m = $("#deviceModal");
-        const dispRow = (n) => {
+        const inGroups = (id) => disp.get(id) !== "ignored"; // new + adopted both show in the Groups UI
+        const newCount = () => nodes.filter((n) => disp.get(n.id) === "new").length;
+        let filter = newCount() > 0 ? "new" : "all"; // default to triage when there's something new
+
+        const matchFilter = (n) => {
           const d = disp.get(n.id);
-          return `<div class="comp"><div class="who">#${n.id} ${esc(nodeLabel(n))}${d === "new" ? ' <span class="badge">new</span>' : ""}</div>
-            <select data-disp="${n.id}" style="width:170px; flex:0 0 auto">
-              <option value="adopted" ${d === "adopted" ? "selected" : ""}>In groups</option>
-              <option value="ignored" ${d === "ignored" ? "selected" : ""}>Ignored</option>
-              ${d === "new" ? '<option value="new" selected>New (untriaged)</option>' : ""}
-            </select></div>`;
+          if (filter === "new") return d === "new";
+          if (filter === "ignored") return d === "ignored";
+          if (filter === "groups") return d !== "ignored";
+          return true;
         };
+        const badge = (id) => { const d = disp.get(id); return d === "new" ? ' <span class="badge">new</span>' : d === "ignored" ? ' <span class="badge lr">ignored</span>' : ""; };
+        const devRow = (n) => `<label class="devrow"><input type="checkbox" data-dev="${n.id}" ${inGroups(n.id) ? "checked" : ""}/><span class="nm">#${n.id} ${esc(nodeLabel(n))}</span>${badge(n.id)}</label>`;
+
+        const counts = () => ({ all: nodes.length, new: nodes.filter((n) => disp.get(n.id) === "new").length, groups: nodes.filter((n) => disp.get(n.id) !== "ignored").length, ignored: nodes.filter((n) => disp.get(n.id) === "ignored").length });
+
+        const paintChips = () => {
+          const c = counts();
+          const chip = (id, label) => `<span class="chip fchip ${filter === id ? "sel" : ""}" data-filter="${id}">${label} ${c[id]}</span>`;
+          m.querySelector("#dmChips").innerHTML = [chip("all", "All"), chip("new", "New"), chip("groups", "In groups"), chip("ignored", "Ignored")].join(" ");
+          m.querySelectorAll("[data-filter]").forEach((el) => el.onclick = () => { filter = el.dataset.filter; paint(); });
+        };
+
         const paint = () => {
           const q = (m.querySelector("#dmSearch")?.value || "").toLowerCase();
-          const list = nodes.filter((n) => !q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q));
+          const list = nodes.filter((n) => matchFilter(n) && (!q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q)));
           const byRoom = {};
           for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
-          m.querySelector("#dmBody").innerHTML = Object.keys(byRoom).sort().map((room) =>
-            `<div style="margin-top:8px"><div class="sub" style="font-weight:600">${esc(room)}</div>${byRoom[room].map(dispRow).join("")}</div>`
-          ).join("") || `<div class="sub" style="margin-top:8px">No matching devices.</div>`;
-          m.querySelectorAll("[data-disp]").forEach((s) => s.addEventListener("change", () => disp.set(Number(s.dataset.disp), s.value)));
+          m.querySelector("#dmBody").innerHTML = Object.keys(byRoom).sort().map((room) => {
+            const ns = byRoom[room];
+            return `<div style="margin-top:10px"><div class="row between" style="border-bottom:1px solid var(--line); padding-bottom:2px"><span class="sub" style="font-weight:600">${esc(room)} (${ns.length})</span><span><button type="button" class="sm ghost" data-room-in="${esc(room)}" style="padding:0 7px">all in</button> <button type="button" class="sm ghost" data-room-ig="${esc(room)}" style="padding:0 7px">all ignore</button></span></div>${ns.map(devRow).join("")}</div>`;
+          }).join("") || `<div class="sub" style="margin-top:10px">No matching devices.</div>`;
+          m.querySelectorAll("[data-dev]").forEach((cb) => cb.addEventListener("change", () => { disp.set(Number(cb.dataset.dev), cb.checked ? "adopted" : "ignored"); paintChips(); }));
+          m.querySelectorAll("[data-room-in]").forEach((b) => b.onclick = () => { for (const n of nodes) if ((n.location || "—") === b.dataset.roomIn) disp.set(n.id, "adopted"); paint(); });
+          m.querySelectorAll("[data-room-ig]").forEach((b) => b.onclick = () => { for (const n of nodes) if ((n.location || "—") === b.dataset.roomIg) disp.set(n.id, "ignored"); paint(); });
+          paintChips();
         };
+
         m.innerHTML = `<form method="dialog">
           <div class="modal-h">Devices</div>
           <div class="modal-b">
-            <div class="sub" style="margin-bottom:8px">Choose which devices belong in the Groups UI. New switches default to “in groups”; ignored devices are hidden from the gang builder. (Parameters apply to all devices regardless.)</div>
-            <input id="dmSearch" placeholder="Search…" style="margin-bottom:6px"/>
-            <div class="row" style="gap:8px; margin-bottom:4px"><button type="button" class="sm" id="dmAdoptNew">Adopt all new</button><button type="button" class="sm ghost" id="dmIgnoreNew">Ignore all new</button></div>
+            <div class="sub" style="margin-bottom:8px">Tick a device to keep it in the Groups UI; untick to hide it from the gang builder. New switches start ticked. (Parameters apply to every device regardless.)</div>
+            <input id="dmSearch" placeholder="Search…" style="margin-bottom:8px"/>
+            <div id="dmChips" style="margin-bottom:6px"></div>
             <div id="dmBody"></div>
           </div>
           <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save</button></div>
         </form>`;
         paint();
         m.querySelector("#dmSearch").addEventListener("input", paint);
-        m.querySelector("#dmAdoptNew").addEventListener("click", () => { for (const n of nodes) if (disp.get(n.id) === "new") disp.set(n.id, "adopted"); paint(); });
-        m.querySelector("#dmIgnoreNew").addEventListener("click", () => { for (const n of nodes) if (disp.get(n.id) === "new") disp.set(n.id, "ignored"); paint(); });
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
           if (m.returnValue !== "save") return;
