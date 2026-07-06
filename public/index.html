@@ -331,9 +331,14 @@
             ? `<div class="issue warn"><b>${staleForGang.length}</b> link(s) not in this setup — <b>Sync</b> will remove them:<div class="fix">${staleForGang.map((a) => `#${a.source} ${esc(nodeLabel(nodeById(a.source)))} — ${esc(a.capabilityTitle || "extra")}`).join("<br>")}</div></div>`
             : "";
           const paramFixes = (S.plan.paramActions || []).filter((a) => a.policy === g.name);
+          const paramIssues = (S.plan.issues || []).filter((i) => i.gang === g.name && i.code === "NO_SETTING");
           const paramNote = paramFixes.length
             ? `<div class="issue warn"><b>${paramFixes.length}</b> device setting(s) to fix — <b>Sync</b> will apply:<div class="fix">${paramFixes.map((a) => `#${a.node} ${esc(nodeLabel(nodeById(a.node)))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
-            : "";
+            : paramIssues.length
+              ? `<div class="issue warn">${paramIssues.map((i) => esc(i.message)).join("<br>")}</div>`
+              : g.forwardRemote
+                ? `<div class="sub" style="margin-top:6px">✓ Forwarding app/automation changes: enabled on load #${g.load} (companions stay off by design — that's what keeps it loop-free)</div>`
+                : "";
           return `<div class="card">
             <div class="gang-head">
               <span class="name">${esc(g.name)}</span>
@@ -409,7 +414,7 @@
             <label style="display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--ink)"><input type="checkbox" id="gLed" ${existing?.ledSync ? "checked" : ""} style="width:auto"/> Mirror brightness to companions (so LED bars track the load)</label>
             <div class="sub" style="margin-top:2px">Association: wires the load back to each companion so their bars follow the load's level in real time. LED color/brightness is a <i>parameter</i> — set that in the Parameters tab.</div>
             <label style="display:flex; align-items:center; gap:8px; margin-top:12px; color:var(--ink)"><input type="checkbox" id="gFwd" ${existing?.forwardRemote ? "checked" : ""} style="width:auto"/> Forward app/automation changes to companions</label>
-            <div class="sub" style="margin-top:2px">Device setting on the load (factory-off): without it, changes made via Home Assistant, voice, or automations never reach the companions — only physical paddle presses do. Sync enables it on the load.</div>
+            <div class="sub" style="margin-top:2px">A device setting on the <b>load only</b> (factory-off): without it, changes from Home Assistant / voice / automations never reach the companions — only physical paddle presses do. Sync enables it on the load. Companions are intentionally left off — enabling it on them too would create a forwarding loop. (Requires "Mirror brightness" so the load has links to forward on.)</div>
             <div class="issue warn" id="compat" style="display:none"></div>
           </div>
           <div class="modal-f">
