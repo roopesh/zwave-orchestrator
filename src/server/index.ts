@@ -101,6 +101,14 @@ function filterActions(actions: PlanAction[], body: any): PlanAction[] {
   return out;
 }
 
+/** Same gang/node filtering for gang-driven device-setting fixes (policy field = gang name). */
+function filterGangParamActions(actions: ParamAction[], body: any): ParamAction[] {
+  let out = actions;
+  if (body?.gang) out = out.filter((a) => a.policy.toLowerCase() === String(body.gang).toLowerCase());
+  if (body?.node != null) out = out.filter((a) => a.node === Number(body.node));
+  return out;
+}
+
 // ---- tiny http helpers ----
 function json(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data);
@@ -192,7 +200,10 @@ async function handleWrite(hub: Hub, res: ServerResponse, body: any, mode: "add"
   const adapter = await hub.ensure();
   const topology = loadTopology(GANGS_FILE);
   const plan = mode === "add" ? await computePlan(adapter, topology) : await computeTeardown(adapter, topology);
-  const results = await applyActions(adapter, filterActions(plan.actions, body));
+  const results: any[] = await applyActions(adapter, filterActions(plan.actions, body));
+  if (mode === "add" && plan.paramActions.length) {
+    results.push(...(await applyParamActions(adapter, filterGangParamActions(plan.paramActions, body))));
+  }
   const after = await computePlan(adapter, topology); // fresh plan reflecting the writes
   json(res, 200, { results, plan: after });
 }
@@ -201,7 +212,10 @@ async function handleReconcile(hub: Hub, res: ServerResponse, body: any): Promis
   const adapter = await hub.ensure();
   const topology = loadTopology(GANGS_FILE);
   const addPlan = await computePlan(adapter, topology);
-  const addResults = await applyActions(adapter, filterActions(addPlan.actions, body));
+  const addResults: any[] = await applyActions(adapter, filterActions(addPlan.actions, body));
+  if (addPlan.paramActions.length) {
+    addResults.push(...(await applyParamActions(adapter, filterGangParamActions(addPlan.paramActions, body))));
+  }
   const stalePlan = await computeStale(adapter, topology);
   const remResults = await applyActions(adapter, filterActions(stalePlan.actions, body));
   const after = await computePlan(adapter, topology);
@@ -213,11 +227,13 @@ async function handleParams(hub: Hub, res: ServerResponse): Promise<void> {
   const adapter = await hub.ensure();
   const [nodes, params] = [await adapter.getNodes(), await adapter.getConfigParams()];
   const doc = loadPolicies(POLICIES_FILE);
-  const plan = await computeParamPlan(adapter, doc, params);
+  const topology = loadTopology(GANGS_FILE);
+  const plan = await computeParamPlan(adapter, doc, topology, params);
   json(res, 200, {
     nodes: nodes.map((n) => ({ id: n.id, name: n.name, location: n.location, model: n.product, isController: n.isController, isLongRange: n.isLongRange })),
     params,
     policies: doc.policies,
+    gangs: topology.gangs.map((g) => ({ name: g.name, load: g.load, companions: g.companions.map((c) => c.node) })),
     plan,
   });
 }
@@ -225,12 +241,13 @@ async function handleParams(hub: Hub, res: ServerResponse): Promise<void> {
 async function handleParamsApply(hub: Hub, res: ServerResponse, body: any): Promise<void> {
   const adapter = await hub.ensure();
   const doc = loadPolicies(POLICIES_FILE);
-  const plan = await computeParamPlan(adapter, doc);
+  const topology = loadTopology(GANGS_FILE);
+  const plan = await computeParamPlan(adapter, doc, topology);
   let actions: ParamAction[] = plan.actions;
   if (body?.policy) actions = actions.filter((a) => a.policy.toLowerCase() === String(body.policy).toLowerCase());
   if (body?.node != null) actions = actions.filter((a) => a.node === Number(body.node));
   const results = await applyParamActions(adapter, actions);
-  const after = await computeParamPlan(adapter, doc);
+  const after = await computeParamPlan(adapter, doc, topology);
   json(res, 200, { results, plan: after });
 }
 
@@ -239,7 +256,7 @@ async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Pro
   if (!doc) return void json(res, 400, { error: "expected { policies: [...] }" });
   savePolicies(POLICIES_FILE, doc);
   let plan: any = { actions: [], issues: [], satisfied: 0 };
-  if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc);
+  if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc, loadTopology(GANGS_FILE));
   json(res, 200, { ok: true, policies: doc.policies, plan });
 }
 

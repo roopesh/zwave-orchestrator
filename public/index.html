@@ -325,10 +325,14 @@
             const fix = st.issue?.remediation ? `<div class="issue ${st.issue.severity === "warning" ? "warn" : ""}">${esc(st.issue.message)}<div class="fix">→ ${esc(st.issue.remediation)}</div></div>` : "";
             return `<div class="comp"><div class="who">#${id} ${esc(nodeLabel(n))}${lr}</div><span class="chip ${st.kind}">${st.text}</span></div>${fix}`;
           }).join("");
-          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ") + (g.ledSync ? ` <span class="chip good">LED tracking</span>` : "");
+          const does = effCaps(g).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ") + (g.ledSync ? ` <span class="chip good">LED tracking</span>` : "") + (g.forwardRemote ? ` <span class="chip good">Forwards app changes</span>` : "");
           const staleForGang = (S.stale || []).filter((a) => a.gang === g.name);
           const staleNote = staleForGang.length
             ? `<div class="issue warn"><b>${staleForGang.length}</b> link(s) not in this setup — <b>Sync</b> will remove them:<div class="fix">${staleForGang.map((a) => `#${a.source} ${esc(nodeLabel(nodeById(a.source)))} — ${esc(a.capabilityTitle || "extra")}`).join("<br>")}</div></div>`
+            : "";
+          const paramFixes = (S.plan.paramActions || []).filter((a) => a.policy === g.name);
+          const paramNote = paramFixes.length
+            ? `<div class="issue warn"><b>${paramFixes.length}</b> device setting(s) to fix — <b>Sync</b> will apply:<div class="fix">${paramFixes.map((a) => `#${a.node} ${esc(nodeLabel(nodeById(a.node)))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
             : "";
           return `<div class="card">
             <div class="gang-head">
@@ -342,6 +346,7 @@
             <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
             ${comps}
             ${staleNote}
+            ${paramNote}
           </div>`;
         }).join("");
       }
@@ -403,6 +408,8 @@
             </div>
             <label style="display:flex; align-items:center; gap:8px; margin-top:14px; color:var(--ink)"><input type="checkbox" id="gLed" ${existing?.ledSync ? "checked" : ""} style="width:auto"/> Mirror brightness to companions (so LED bars track the load)</label>
             <div class="sub" style="margin-top:2px">Association: wires the load back to each companion so their bars follow the load's level in real time. LED color/brightness is a <i>parameter</i> — set that in the Parameters tab.</div>
+            <label style="display:flex; align-items:center; gap:8px; margin-top:12px; color:var(--ink)"><input type="checkbox" id="gFwd" ${existing?.forwardRemote ? "checked" : ""} style="width:auto"/> Forward app/automation changes to companions</label>
+            <div class="sub" style="margin-top:2px">Device setting on the load (factory-off): without it, changes made via Home Assistant, voice, or automations never reach the companions — only physical paddle presses do. Sync enables it on the load.</div>
             <div class="issue warn" id="compat" style="display:none"></div>
           </div>
           <div class="modal-f">
@@ -487,6 +494,7 @@
           if (!name || !load || !companions.length || !capsArr.length) { toast("Need a name, load, ≥1 companion, ≥1 behavior"); return; }
           const gang = { name, load, companions };
           if (m.querySelector("#gLed").checked) gang.ledSync = true;
+          if (m.querySelector("#gFwd").checked) gang.forwardRemote = true;
           const match = (S.presets || []).find((p) => sameSet(p.capabilities, capsArr));
           if (match) gang.profile = match.id; else gang.capabilities = capsArr;
           const gangs = (S.topology.gangs || []).slice();
@@ -599,9 +607,13 @@
       const pNode = (id) => (P?.nodes || []).find((n) => n.id === id);
       const pLabel = (n) => (n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.model || "#" + n.id}` : "?");
       const pShort = (id) => pLabel(pNode(id));
-      const paramDefAny = (param, prefer) => {
-        for (const id of prefer || []) { const p = (P.params[id] || []).find((x) => x.param === param); if (p) return p; }
-        for (const n of P.nodes || []) { const p = (P.params[n.id] || []).find((x) => x.param === param); if (p) return p; }
+      // A setting is identified by (param, key) — key is the bitmask sub-parameter, if any.
+      const sameParam = (p, param, key) => p.param === param && p.key === key;
+      const pkId = (s) => `${s.param}|${s.key ?? ""}`; // stable string id for select values / dedupe
+      const pkParse = (str) => { const [a, b] = str.split("|"); return { param: Number(a), key: b === "" ? undefined : Number(b) }; };
+      const paramDefAny = (param, key, prefer) => {
+        for (const id of prefer || []) { const p = (P.params[id] || []).find((x) => sameParam(x, param, key)); if (p) return p; }
+        for (const n of P.nodes || []) { const p = (P.params[n.id] || []).find((x) => sameParam(x, param, key)); if (p) return p; }
         return null;
       };
       const valueLabel = (def, v) => { if (v == null) return "?"; const o = def?.options?.find((x) => x.value === v); return o ? o.label : String(v); };
@@ -616,7 +628,9 @@
         el.innerHTML = pols.map((pol) => {
           const acts = (P.plan.actions || []).filter((a) => a.policy === pol.name);
           const issues = (P.plan.issues || []).filter((i) => i.policy === pol.name);
-          const settings = pol.settings.map((s) => { const def = paramDefAny(s.param, pol.targets); return `<span class="chip">${esc(def ? def.label : "p" + s.param)}: ${esc(valueLabel(def, s.value))}</span>`; }).join(" ");
+          const settings = pol.settings.map((s) => { const def = paramDefAny(s.param, s.key, pol.targets); return `<span class="chip">${esc(def ? def.label : "p" + s.param + (s.key !== undefined ? "[" + s.key + "]" : ""))}: ${esc(valueLabel(def, s.value))}</span>`; }).join(" ");
+          const roleWord = { all: "all switches", load: "load only", companions: "companions only" };
+          const gangBits = (pol.gangTargets || []).map((gt) => `<span class="chip good">${esc(gt.gang)} (${roleWord[gt.role] || gt.role})</span>`).join(" ");
           const targets = pol.targets.map((id) => `#${id} ${esc(pShort(id))}`).join(", ");
           const drift = acts.length
             ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
@@ -627,7 +641,8 @@
               <button class="sm" data-pedit="${esc(pol.name)}">Edit</button>
               <button class="sm primary" data-psync="${esc(pol.name)}">Sync</button></div>
             <div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Settings:</span> ${settings}</div>
-            <div class="sub">Devices: ${targets}</div>
+            ${gangBits ? `<div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Gangs:</span> ${gangBits}</div>` : ""}
+            ${targets ? `<div class="sub">Devices: ${targets}</div>` : ""}
             ${drift}${na}
           </div>`;
         }).join("");
@@ -640,10 +655,10 @@
         nodes.forEach((n) => (byModel[n.model] = byModel[n.model] || []).push(n));
         let html = "";
         for (const [model, ns] of Object.entries(byModel)) {
-          const nums = new Set(); ns.forEach((n) => (P.params[n.id] || []).forEach((p) => nums.add(p.param)));
+          const ids = new Map(); ns.forEach((n) => (P.params[n.id] || []).forEach((p) => ids.set(pkId(p), p)));
           const rows = [];
-          for (const num of [...nums].sort((a, b) => a - b)) {
-            const defs = ns.map((n) => (P.params[n.id] || []).find((x) => x.param === num));
+          for (const { param, key } of [...ids.values()].sort((a, b) => a.param - b.param || (a.key ?? -1) - (b.key ?? -1)).map((p) => ({ param: p.param, key: p.key }))) {
+            const defs = ns.map((n) => (P.params[n.id] || []).find((x) => sameParam(x, param, key)));
             const def = defs.find(Boolean);
             if (!def || def.writeable === false) continue; // skip read-only diagnostics (e.g. Internal Temperature)
             const distinct = new Set(defs.map((p) => (p ? p.value : "?")));
@@ -671,27 +686,44 @@
       function openPolicyModal(existing, seedParams, seedTargets) {
         const nodes = (P.nodes || []).filter((n) => !n.isController);
         const targets = new Set(existing ? existing.targets : seedTargets || []);
-        const settings = existing ? existing.settings.map((s) => ({ param: s.param, value: s.value })) : [];
-        if (!existing && seedParams) for (const num of seedParams) { const def = paramDefAny(num); if (def) settings.push({ param: num, value: def.default ?? def.options?.[0]?.value ?? def.value ?? 0 }); }
+        const gangSel = new Map((existing?.gangTargets || []).map((gt) => [gt.gang, gt.role]));
+        const settings = existing ? existing.settings.map((s) => ({ param: s.param, key: s.key, value: s.value })) : [];
         const seedName = !existing && seedParams && seedParams.length ? "LED appearance" : "";
         const m = $("#policyModal");
+
+        // Effective targets: explicit devices + gang members (resolved by role, live membership).
+        const effTargets = () => {
+          const out = new Set(targets);
+          for (const [name, role] of gangSel) {
+            const g = (P.gangs || []).find((x) => x.name === name);
+            if (!g) continue;
+            if (role !== "companions") out.add(g.load);
+            if (role !== "load") for (const id of g.companions) out.add(id);
+          }
+          return [...out];
+        };
         const availableParams = () => {
           const map = new Map();
-          for (const id of targets) for (const p of P.params[id] || []) if (p.writeable && !map.has(p.param)) map.set(p.param, p);
-          return [...map.values()].sort((a, b) => a.param - b.param);
+          for (const id of effTargets()) for (const p of P.params[id] || []) if (p.writeable && !map.has(pkId(p))) map.set(pkId(p), p);
+          return [...map.values()].sort((a, b) => a.param - b.param || (a.key ?? -1) - (b.key ?? -1));
         };
+        if (!existing && seedParams) for (const pk of seedParams) { const def = paramDefAny(pk.param, pk.key, effTargets()); if (def) settings.push({ param: pk.param, key: pk.key, value: def.default ?? def.options?.[0]?.value ?? def.value ?? 0 }); }
 
         m.innerHTML = `<form method="dialog">
           <div class="modal-h">${existing ? "Edit policy" : "New policy"}</div>
           <div class="modal-b">
             <label>Policy name</label><input id="pName" value="${existing ? esc(existing.name) : esc(seedName)}" placeholder="e.g. Inovelli defaults" />
+            ${(P.gangs || []).length ? `<label>Apply to gangs (follows the gang — membership changes apply automatically)</label><div id="pGangs"></div>` : ""}
             <label>Apply to devices</label>
             <input id="pSearch" placeholder="Search by model, name, room, #id…" style="margin-bottom:6px"/>
             <div id="pTargets"></div>
             ${existing ? "" : `<label>Prefill settings from a device (optional)</label><select id="pSeed"><option value="">— snapshot a well-configured switch —</option>${nodes.map((n) => `<option value="${n.id}">#${n.id} ${esc(pLabel(n))}</option>`).join("")}</select>`}
-            <label>Settings (pick a parameter and the value you want)</label>
-            <div id="pSettings"></div>
-            <button type="button" class="sm" id="pAdd">+ Add setting</button>
+            <div id="pSettingsWrap">
+              <label>Settings (pick a parameter and the value you want)</label>
+              <div id="pSettings"></div>
+              <button type="button" class="sm" id="pAdd">+ Add setting</button>
+            </div>
+            <div class="sub" id="pPickFirst" style="margin-top:10px; display:none">Pick devices (or a gang) above first — the available settings and their value choices come from the selected devices themselves.</div>
             <div class="issue warn" id="pNote" style="display:none; margin-top:12px"></div>
           </div>
           <div class="modal-f">
@@ -703,20 +735,25 @@
         </form>`;
 
         const valueControl = (i) => {
-          const s = settings[i], def = paramDefAny(s.param, [...targets]);
+          const s = settings[i], def = paramDefAny(s.param, s.key, effTargets());
           if (def?.options?.length) return `<select data-val="${i}">${def.options.map((o) => `<option value="${o.value}" ${o.value === s.value ? "selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
           return `<input type="number" data-val="${i}" value="${s.value}" ${def?.min != null ? `min="${def.min}"` : ""} ${def?.max != null ? `max="${def.max}"` : ""} style="max-width:130px"/>${def?.unit ? " " + esc(def.unit) : ""}`;
         };
         function paintSettings() {
+          // Gate: settings only make sense once devices define them.
+          const any = effTargets().length > 0;
+          m.querySelector("#pSettingsWrap").style.display = any ? "" : "none";
+          m.querySelector("#pPickFirst").style.display = any ? "none" : "";
+          if (!any) return;
           const avail = availableParams();
           const box = m.querySelector("#pSettings");
           box.innerHTML = settings.map((s, i) => {
-            const inList = avail.some((p) => p.param === s.param);
-            const extra = inList ? "" : `<option value="${s.param}" selected>${esc((paramDefAny(s.param, [...targets]) || {}).label || "p" + s.param)}</option>`;
-            const opts = avail.map((p) => `<option value="${p.param}" ${p.param === s.param ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+            const inList = avail.some((p) => pkId(p) === pkId(s));
+            const extra = inList ? "" : `<option value="${pkId(s)}" selected>${esc((paramDefAny(s.param, s.key, effTargets()) || {}).label || "p" + s.param + (s.key !== undefined ? "[" + s.key + "]" : ""))}</option>`;
+            const opts = avail.map((p) => `<option value="${pkId(p)}" ${pkId(p) === pkId(s) ? "selected" : ""}>${esc(p.label)}</option>`).join("");
             return `<div class="setline"><select data-param="${i}">${extra}${opts}</select> = ${valueControl(i)} <button type="button" class="ghost" data-del="${i}">✕</button></div>`;
           }).join("") || `<div class="sub" style="margin-bottom:7px">No settings yet — add one.</div>`;
-          box.querySelectorAll("[data-param]").forEach((sel) => sel.addEventListener("change", () => { const i = Number(sel.dataset.param); settings[i].param = Number(sel.value); const def = paramDefAny(settings[i].param, [...targets]); settings[i].value = def?.default ?? def?.options?.[0]?.value ?? 0; paintSettings(); updateNote(); }));
+          box.querySelectorAll("[data-param]").forEach((sel) => sel.addEventListener("change", () => { const i = Number(sel.dataset.param); const pk = pkParse(sel.value); settings[i].param = pk.param; settings[i].key = pk.key; const def = paramDefAny(pk.param, pk.key, effTargets()); settings[i].value = def?.default ?? def?.options?.[0]?.value ?? 0; paintSettings(); updateNote(); }));
           box.querySelectorAll("[data-val]").forEach((inp) => inp.addEventListener("change", () => { settings[Number(inp.dataset.val)].value = Number(inp.value); updateNote(); }));
           box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); }));
         }
@@ -726,11 +763,29 @@
           const msgs = [];
           if (gone.length) msgs.push(`${gone.map((id) => "#" + id).join(", ")} ${gone.length > 1 ? "are" : "is"} no longer on the mesh.<button type="button" class="sm" id="pRmGone" style="margin-left:8px; padding:1px 8px">Remove from policy</button>`);
           for (const s of settings) {
-            const lack = [...targets].filter((id) => onMesh.has(id) && !(P.params[id] || []).some((p) => p.param === s.param));
-            if (lack.length) { const def = paramDefAny(s.param, [...targets]); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
+            const lack = effTargets().filter((id) => onMesh.has(id) && !(P.params[id] || []).some((p) => sameParam(p, s.param, s.key)));
+            if (lack.length) { const def = paramDefAny(s.param, s.key, effTargets()); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
           }
           const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
           const rm = m.querySelector("#pRmGone"); if (rm) rm.onclick = () => { for (const id of gone) targets.delete(id); paintTargets(); updateNote(); };
+        }
+
+        function paintGangs() {
+          const box = m.querySelector("#pGangs");
+          if (!box) return;
+          box.innerHTML = (P.gangs || []).map((g) => {
+            const sel = gangSel.get(g.name);
+            const roles = [["all", "All switches"], ["load", "Load only"], ["companions", "Companions only"]];
+            return `<div class="comp"><label style="display:flex; gap:8px; align-items:center; margin:0; color:var(--ink); flex:1"><input type="checkbox" data-gng="${esc(g.name)}" ${sel ? "checked" : ""} style="width:auto"/> ${esc(g.name)} <span class="sub">(load #${g.load} + ${g.companions.length})</span></label>
+              <select data-gngrole="${esc(g.name)}" style="width:160px; flex:0 0 auto" ${sel ? "" : "disabled"}>${roles.map(([v, l]) => `<option value="${v}" ${(sel || "all") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>`;
+          }).join("");
+          box.querySelectorAll("[data-gng]").forEach((c) => c.addEventListener("change", () => {
+            const name = c.dataset.gng;
+            if (c.checked) gangSel.set(name, m.querySelector(`[data-gngrole="${CSS.escape(name)}"]`)?.value || "all");
+            else gangSel.delete(name);
+            paintGangs(); paintSettings(); updateNote();
+          }));
+          box.querySelectorAll("[data-gngrole]").forEach((s) => s.addEventListener("change", () => { if (gangSel.has(s.dataset.gngrole)) { gangSel.set(s.dataset.gngrole, s.value); paintSettings(); updateNote(); } }));
         }
 
         function paintTargets() {
@@ -747,7 +802,7 @@
           box.querySelectorAll("[data-selall]").forEach((b) => b.addEventListener("click", () => { const model = b.dataset.selall; for (const n of nodes) if ((n.model || "Unknown") === model) targets.add(n.id); paintTargets(); paintSettings(); updateNote(); }));
         }
 
-        paintTargets(); paintSettings(); updateNote();
+        paintGangs(); paintTargets(); paintSettings(); updateNote();
         m.querySelector("#pSearch").addEventListener("input", paintTargets);
         const seedSel = m.querySelector("#pSeed");
         if (seedSel) seedSel.addEventListener("change", () => {
@@ -755,11 +810,11 @@
           targets.add(id);
           paintTargets();
           settings.length = 0;
-          for (const p of P.params[id] || []) if (p.writeable && p.value != null && p.default != null && p.value !== p.default) settings.push({ param: p.param, value: p.value });
+          for (const p of P.params[id] || []) if (p.writeable && p.value != null && p.default != null && p.value !== p.default) settings.push({ param: p.param, key: p.key, value: p.value });
           paintSettings(); updateNote();
           toast(`Loaded ${settings.length} customized setting(s) from #${id}`);
         });
-        m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; settings.push({ param: a ? a.param : 1, value: a ? (a.default ?? a.options?.[0]?.value ?? 0) : 0 }); paintSettings(); updateNote(); });
+        m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; if (!a) { toast("Pick devices first"); return; } settings.push({ param: a.param, key: a.key, value: a.default ?? a.options?.[0]?.value ?? 0 }); paintSettings(); updateNote(); });
 
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
@@ -767,8 +822,9 @@
           if (m.returnValue === "delete") { await savePolicies((P.policies || []).filter((x) => x.name !== existing.name)); return; }
           const name = m.querySelector("#pName").value.trim();
           const tgts = [...targets];
-          if (!name || !tgts.length || !settings.length) { toast("Need a name, ≥1 device, ≥1 setting"); return; }
-          const policy = { name, targets: tgts, settings: settings.map((s) => ({ param: s.param, value: s.value })) };
+          const gangTargets = [...gangSel].map(([gang, role]) => ({ gang, role }));
+          if (!name || (!tgts.length && !gangTargets.length) || !settings.length) { toast("Need a name, ≥1 device or gang, ≥1 setting"); return; }
+          const policy = { name, targets: tgts, ...(gangTargets.length ? { gangTargets } : {}), settings: settings.map((s) => ({ param: s.param, ...(s.key !== undefined ? { key: s.key } : {}), value: s.value })) };
           const pols = (P.policies || []).slice();
           const idx = existing ? pols.findIndex((x) => x.name === existing.name) : -1;
           if (idx >= 0) pols[idx] = policy; else pols.push(policy);
@@ -815,10 +871,10 @@
       });
       $("#btnNewPolicy").onclick = () => openPolicyModal(null);
       $("#btnLedPolicy").onclick = () => {
-        const led = new Set(), tgts = new Set();
-        for (const n of P?.nodes || []) for (const p of P.params[n.id] || []) if (p.writeable && /led/i.test(p.label)) { led.add(p.param); tgts.add(n.id); }
+        const led = new Map(), tgts = new Set();
+        for (const n of P?.nodes || []) for (const p of P.params[n.id] || []) if (p.writeable && /led/i.test(p.label)) { led.set(pkId(p), { param: p.param, key: p.key }); tgts.add(n.id); }
         if (!led.size) { toast("No LED parameters found on your devices"); return; }
-        openPolicyModal(null, [...led].sort((a, b) => a - b), [...tgts]);
+        openPolicyModal(null, [...led.values()].sort((a, b) => a.param - b.param || (a.key ?? -1) - (b.key ?? -1)), [...tgts]);
       };
       $("#btnSyncAllParams").onclick = () => doParamSync({});
       $("#policies").addEventListener("click", (e) => {

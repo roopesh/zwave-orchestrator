@@ -7,7 +7,8 @@ import type { AssociationTransport } from "../zwave/adapter.ts";
 import type { GangSpec, Topology } from "./gangs.ts";
 import { rawGroupsFor, wantedCapabilitiesFor } from "./gangs.ts";
 import { CAPABILITIES, groupCapabilities, resolveGroups, type CapabilityId } from "./capabilities.ts";
-import type { AssociationGroup } from "../types.ts";
+import type { AssociationGroup, ConfigParam } from "../types.ts";
+import type { ParamAction } from "./paramPlan.ts";
 
 export interface PlanAction {
   kind: "add" | "remove";
@@ -25,13 +26,16 @@ export interface PlanIssue {
   severity: "error" | "warning";
   gang: string;
   node: number;
-  code: "MISSING_NODE" | "LONG_RANGE" | "SECURITY_MISMATCH" | "NO_GROUP" | "NO_CAPABILITY" | "GROUP_FULL";
+  code: "MISSING_NODE" | "LONG_RANGE" | "SECURITY_MISMATCH" | "NO_GROUP" | "NO_CAPABILITY" | "NO_SETTING" | "GROUP_FULL";
   message: string;
   remediation?: string;
 }
 
 export interface Plan {
   actions: PlanAction[];
+  /** Device-setting fixes required by gang options (e.g. forwardRemote → enable the load's
+   *  "Forward Z-Wave Commands to Associated Devices"). Applied alongside the associations. */
+  paramActions: ParamAction[];
   issues: PlanIssue[];
   satisfied: number;
 }
@@ -100,14 +104,23 @@ async function levelGroupOfLoad(read: ReturnType<typeof makeReader>, loadId: num
   return { gid, group, current };
 }
 
+/** The load-side device setting that relays Z-Wave-received commands to the associated group
+ *  (Inovelli param 59 key 2). Matched by label so it works per device, not by hardcoded number. */
+function findForwardSetting(list: ConfigParam[]): ConfigParam | undefined {
+  return list.find((p) => p.writeable && /forward/i.test(p.label) && /z.?wave/i.test(p.label));
+}
+
 export async function computePlan(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
   await read.prefetch(nodes.filter((n) => !n.isController && !n.isLongRange).map((n) => n.id));
   const actions: PlanAction[] = [];
+  const paramActions: ParamAction[] = [];
   const issues: PlanIssue[] = [];
   let satisfied = 0;
+  const needsParams = topo.gangs.some((g) => g.forwardRemote && byId.has(g.load));
+  const paramsByNode = needsParams ? await adapter.getConfigParams() : {};
 
   for (const gang of topo.gangs) {
     const load = byId.get(gang.load);
@@ -174,8 +187,22 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
         }
       }
     }
+
+    // Forward remote commands: the load must relay app/automation-triggered changes to the group.
+    if (gang.forwardRemote) {
+      const def = findForwardSetting(paramsByNode[gang.load] ?? []);
+      if (!def) {
+        issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "NO_SETTING", message: `#${gang.load} "${label(load)}" has no "forward Z-Wave commands" setting — app/automation changes won't propagate to companions on this device.` });
+      } else if (def.value === 1) {
+        satisfied++;
+      } else {
+        const desiredLabel = def.options?.find((o) => o.value === 1)?.label ?? "Enable";
+        const currentLabel = def.options?.find((o) => o.value === def.value)?.label ?? String(def.value);
+        paramActions.push({ policy: gang.name, node: gang.load, param: def.param, key: def.key, label: def.label, current: def.value, currentLabel, desired: 1, desiredLabel });
+      }
+    }
   }
-  return { actions, issues, satisfied };
+  return { actions, paramActions, issues, satisfied };
 }
 
 export async function computeTeardown(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
@@ -213,7 +240,7 @@ export async function computeTeardown(adapter: AssociationTransport, topo: Topol
       }
     }
   }
-  return { actions, issues, satisfied: 0 };
+  return { actions, paramActions: [], issues, satisfied: 0 };
 }
 
 /** Stale links: any control association *touching a managed load* that the topology doesn't want —
@@ -268,5 +295,5 @@ export async function computeStale(adapter: AssociationTransport, topo: Topology
       }
     }
   }
-  return { actions, issues: [], satisfied: 0 };
+  return { actions, paramActions: [], issues: [], satisfied: 0 };
 }

@@ -69,8 +69,8 @@ export class MockAdapter implements AssociationTransport {
     for (const n of this.nodes) out[n.id] = n.params ?? [];
     return out;
   }
-  async setConfigValue(nodeId: number, param: number, value: number): Promise<number> {
-    const p = this.n(nodeId)?.params?.find((x) => x.param === param);
+  async setConfigValue(nodeId: number, param: number, value: number, key?: number): Promise<number> {
+    const p = this.n(nodeId)?.params?.find((x) => x.param === param && x.key === key);
     if (p) p.value = value;
     return 255;
   }

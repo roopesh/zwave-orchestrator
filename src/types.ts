@@ -42,9 +42,14 @@ export interface ConfigOption {
   label: string;
 }
 
-/** A device configuration parameter (Command Class 112) with metadata + current value. */
+/** A device configuration parameter (Command Class 112) with metadata + current value.
+ *  Bitmask ("partial") parameters appear as separate entries sharing `param` with distinct
+ *  `key`s (the zwave-js propertyKey), each carrying its own label/options — e.g. Inovelli
+ *  param 59 splits into "Send Local Commands..." (key 1) and "Forward Z-Wave Commands..." (key 2). */
 export interface ConfigParam {
   param: number;
+  /** propertyKey for bitmask sub-parameters; undefined for whole parameters. */
+  key?: number;
   label: string;
   description?: string;
   value: number | null;

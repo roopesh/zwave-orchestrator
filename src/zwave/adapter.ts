@@ -14,6 +14,8 @@ export interface AssociationTransport {
   getAssociations(addr: AssociationAddress): Promise<AssociationsByGroup>;
   addAssociations(addr: AssociationAddress, group: number, targets: AssociationAddress[]): Promise<void>;
   removeAssociations(addr: AssociationAddress, group: number, targets: AssociationAddress[]): Promise<void>;
+  getConfigParams(): Promise<Record<number, ConfigParam[]>>;
+  setConfigValue(nodeId: number, param: number, value: number, key?: number): Promise<number>;
 }
 
 export class ZWaveAdapter implements AssociationTransport {
@@ -85,15 +87,18 @@ export class ZWaveAdapter implements AssociationTransport {
 
   // --- Configuration parameters (Command Class 112) ---
 
-  /** Read every node's config parameters (label, current value, named options) from one state dump. */
+  /** Read every node's config parameters (label, current value, named options) from one state
+   *  dump. Includes bitmask/"partial" parameters (numeric propertyKey) as their own entries —
+   *  each sub-field carries its own metadata (label/options), so they behave like any setting. */
   async getConfigParams(): Promise<Record<number, ConfigParam[]>> {
     const { nodes } = await this.client.startListening();
     const out: Record<number, ConfigParam[]> = {};
     for (const n of nodes) {
       const params: ConfigParam[] = (n.values ?? [])
-        .filter((v: any) => v.commandClass === CONFIGURATION_CC && v.metadata && typeof v.property === "number" && v.propertyKey === undefined)
+        .filter((v: any) => v.commandClass === CONFIGURATION_CC && v.metadata && typeof v.property === "number" && (v.propertyKey === undefined || typeof v.propertyKey === "number"))
         .map((v: any) => ({
           param: v.property,
+          key: typeof v.propertyKey === "number" ? v.propertyKey : undefined,
           label: v.metadata.label ?? `Parameter ${v.property}`,
           description: v.metadata.description,
           value: v.value ?? null,
@@ -106,19 +111,18 @@ export class ZWaveAdapter implements AssociationTransport {
             ? Object.entries(v.metadata.states).map(([k, l]) => ({ value: Number(k), label: String(l) })).sort((a, b) => a.value - b.value)
             : undefined,
         }))
-        .sort((a: ConfigParam, b: ConfigParam) => a.param - b.param);
+        .sort((a: ConfigParam, b: ConfigParam) => a.param - b.param || (a.key ?? -1) - (b.key ?? -1));
       out[n.nodeId] = params;
     }
     return out;
   }
 
-  /** Set one config parameter. Returns the SetValueStatus (255/254 = success, 1 = working). */
-  async setConfigValue(nodeId: number, param: number, value: number): Promise<number> {
-    const res = await this.client.request("node.set_value", {
-      nodeId,
-      valueId: { commandClass: CONFIGURATION_CC, endpoint: 0, property: param },
-      value,
-    });
+  /** Set one config parameter (pass `key` for a bitmask sub-parameter).
+   *  Returns the SetValueStatus (255/254 = success, 1 = working). */
+  async setConfigValue(nodeId: number, param: number, value: number, key?: number): Promise<number> {
+    const valueId: Record<string, unknown> = { commandClass: CONFIGURATION_CC, endpoint: 0, property: param };
+    if (key !== undefined) valueId.propertyKey = key;
+    const res = await this.client.request("node.set_value", { nodeId, valueId, value });
     return res?.result?.status ?? -1;
   }
 }

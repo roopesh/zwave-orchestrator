@@ -23,6 +23,10 @@ export interface GangSpec {
   profile?: string;
   /** Also wire load→each companion on the level group so every LED bar tracks together. */
   ledSync?: boolean;
+  /** Ensure the load forwards Z-Wave-received (app/automation/voice) commands to its associated
+   *  companions — device setting, factory-off on Inovelli (param 59 key 2). Without it, only
+   *  physical paddle presses at the load propagate to the group. */
+  forwardRemote?: boolean;
 }
 
 export interface Topology {
@@ -43,7 +47,7 @@ export function loadTopology(path: string): Topology {
     const companions: CompanionSpec[] = (g.companions ?? []).map((c: any) =>
       typeof c === "number" ? { node: c } : { node: c.node, groups: c.groups, capabilities: c.capabilities, profile: c.profile },
     );
-    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile, ledSync: g.ledSync === true };
+    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile, ledSync: g.ledSync === true, forwardRemote: g.forwardRemote === true };
   });
   return { defaults, gangs };
 }
@@ -94,6 +98,7 @@ export function saveTopology(path: string, topo: Topology): void {
       if (g.capabilities) out.capabilities = g.capabilities;
       if (g.controlGroups) out.controlGroups = g.controlGroups;
       if (g.ledSync) out.ledSync = true;
+      if (g.forwardRemote) out.forwardRemote = true;
       return out;
     }),
   };

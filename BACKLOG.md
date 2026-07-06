@@ -4,29 +4,23 @@ Tracked, not yet started. Ordered roughly by priority within each section.
 
 ## Parameters — bugs
 
-- **Expose ALL config parameters, including bitmask/"partial" parameters.**
-  `adapter.getConfigParams()` filters to `propertyKey === undefined`, which drops every
-  bitmask sub-parameter (e.g. Inovelli param 59 "Send Local Commands to Associated Devices" /
-  "Forward Z-Wave Commands to Associated Devices", and the LED-effect params like `64[0xff]`).
-  These are currently invisible to the Parameters tab and can't be set through the tool at all.
-  Confirmed via a raw (unfiltered) query against live devices — 2026-07-05.
-  Fix: read partial-parameter values too, and label each bit using its own metadata (not the
-  parent parameter's), storing/targeting them as `{param, bit}` or similar in policies.
-- **New-policy parameter dropdown is empty until you check a target device.**
-  The settings picker is scoped to the currently-checked target devices' params; with zero
-  targets checked (the default state of a brand-new policy) it silently falls back to a
-  hardcoded parameter (Dimming Speed). Reproduced live — 2026-07-05. Fix: show a sensible
-  full/deduped parameter list before any target is picked (e.g. union across all devices, or
-  prompt to pick devices first instead of silently defaulting).
+- ~~Expose ALL config parameters, including bitmask/"partial" parameters.~~ **DONE 2026-07-05**:
+  adapter reads partial params as `{param, key}` entries with their own metadata; policies
+  store `key`; UI (policy editor, drift finder, LED seed) is key-aware. ~1,100 previously
+  invisible settings now exposed on the live mesh.
+- ~~New-policy parameter dropdown is empty until you check a target device.~~ **DONE 2026-07-05**:
+  the settings section is hidden until ≥1 device or gang is selected, with an explanation
+  ("settings and value choices come from the selected devices"); no more silent fallback.
 
-## Parameters — suggested policy (once the above are fixed)
+## Parameters — forwarding fix (mechanism built; applying is the user's call)
 
-- **Turn on "Forward Z-Wave Commands to Associated Devices" (Inovelli param 59, bit 0x02) on
-  every load switch.** Confirmed live: disabled (0) on every load in the house except #2
-  (Kitchen Counter Lights). This is very likely why companion LED bars don't track the load
-  when it's controlled via Home Assistant/voice/automation rather than a physical local press —
-  the load simply never forwards that state change to its associated group. Root-caused
-  2026-07-05; not yet applied to any device.
+- **DONE (tooling) 2026-07-05:** gangs now have a "Forward app/automation changes to
+  companions" option (gangs.yaml `forwardRemote`); Sync enables the load's "Forward Z-Wave
+  Commands to Associated Devices" setting, shown in the plan first. Policies can also target
+  gangs by role (all / load / companions), so a house-wide forwarding policy is possible.
+- **TODO (user):** enable the option on the remaining gangs (currently on for Downstairs
+  Hallway Pendant only, pending Sync) — or make one gang-targeted policy for all loads.
+  Then Sync and physically verify the LED bars track app/voice/automation changes.
 
 ## Associations / gangs
 
