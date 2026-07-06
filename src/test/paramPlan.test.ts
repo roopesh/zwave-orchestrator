@@ -99,6 +99,22 @@ test("computePlan with forwardRemote emits a param fix for the load", async () =
   );
 });
 
+test("computePlan forwardRemote=false disables the load's forwarding when it's on", async () => {
+  const a = new MockAdapter([{ id: 1, isController: true }, { id: 26, params: p59(1, 1) }, { id: 20, assoc: wired(26) }]);
+  const t: Topology = { defaults: { profile: "full" }, gangs: [{ name: "Hall", load: 26, companions: [{ node: 20 }], profile: "full", forwardRemote: false }] };
+  const plan = await computePlan(a, t);
+  assert.equal(plan.paramActions.length, 1);
+  assert.equal(plan.paramActions[0].desired, 0);
+  assert.equal(plan.paramActions[0].node, 26);
+});
+
+test("computePlan forwardRemote=undefined leaves the load's forwarding untouched", async () => {
+  const a = new MockAdapter([{ id: 1, isController: true }, { id: 26, params: p59(1, 1) }, { id: 20, assoc: wired(26) }]);
+  const t: Topology = { defaults: { profile: "full" }, gangs: [{ name: "Hall", load: 26, companions: [{ node: 20 }], profile: "full" }] };
+  const plan = await computePlan(a, t);
+  assert.equal(plan.paramActions.length, 0);
+});
+
 test("computePlan forwardRemote: satisfied when already enabled, warns when device lacks it", async () => {
   const ok = new MockAdapter([{ id: 1, isController: true }, { id: 26, params: p59(1, 1) }, { id: 20, assoc: wired(26) }]);
   const t: Topology = { defaults: { profile: "full" }, gangs: [{ name: "Hall", load: 26, companions: [{ node: 20 }], profile: "full", forwardRemote: true }] };

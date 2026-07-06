@@ -47,7 +47,8 @@ export function loadTopology(path: string): Topology {
     const companions: CompanionSpec[] = (g.companions ?? []).map((c: any) =>
       typeof c === "number" ? { node: c } : { node: c.node, groups: c.groups, capabilities: c.capabilities, profile: c.profile },
     );
-    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile, ledSync: g.ledSync === true, forwardRemote: g.forwardRemote === true };
+    // forwardRemote is tri-state: true = ensure on, false = ensure off, undefined = unmanaged.
+    return { name: g.name ?? `gang-${i}`, load: g.load, companions, controlGroups: g.controlGroups, capabilities: g.capabilities, profile: g.profile, ledSync: g.ledSync === true, forwardRemote: typeof g.forwardRemote === "boolean" ? g.forwardRemote : undefined };
   });
   return { defaults, gangs };
 }
@@ -98,7 +99,7 @@ export function saveTopology(path: string, topo: Topology): void {
       if (g.capabilities) out.capabilities = g.capabilities;
       if (g.controlGroups) out.controlGroups = g.controlGroups;
       if (g.ledSync) out.ledSync = true;
-      if (g.forwardRemote) out.forwardRemote = true;
+      if (g.forwardRemote !== undefined) out.forwardRemote = g.forwardRemote;
       return out;
     }),
   };

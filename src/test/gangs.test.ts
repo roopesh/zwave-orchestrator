@@ -29,6 +29,21 @@ test("saveTopology round-trips ledSync, profile, and per-companion overrides", (
   rmSync(path, { force: true });
 });
 
+test("forwardRemote round-trips as tri-state (true / false / absent)", () => {
+  const path = tmp("g3");
+  const topo: any = { defaults: {}, gangs: [
+    { name: "A", load: 1, companions: [], forwardRemote: true },
+    { name: "B", load: 2, companions: [], forwardRemote: false },
+    { name: "C", load: 3, companions: [] },
+  ] };
+  saveTopology(path, topo);
+  const r = loadTopology(path);
+  assert.equal(r.gangs[0].forwardRemote, true);
+  assert.equal(r.gangs[1].forwardRemote, false);
+  assert.equal(r.gangs[2].forwardRemote, undefined);
+  rmSync(path, { force: true });
+});
+
 test("loadTopology returns an empty topology when the file is missing", () => {
   const t = loadTopology(join(tmpdir(), "definitely-does-not-exist-zwa.yaml"));
   assert.deepEqual(t.gangs, []);

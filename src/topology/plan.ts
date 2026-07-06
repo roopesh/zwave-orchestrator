@@ -119,7 +119,7 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
   const paramActions: ParamAction[] = [];
   const issues: PlanIssue[] = [];
   let satisfied = 0;
-  const needsParams = topo.gangs.some((g) => g.forwardRemote && byId.has(g.load));
+  const needsParams = topo.gangs.some((g) => g.forwardRemote !== undefined && byId.has(g.load));
   const paramsByNode = needsParams ? await adapter.getConfigParams() : {};
 
   for (const gang of topo.gangs) {
@@ -188,17 +188,19 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
       }
     }
 
-    // Forward remote commands: the load must relay app/automation-triggered changes to the group.
-    if (gang.forwardRemote) {
+    // Forward remote commands: the load relays app/automation-triggered changes to the group.
+    // Tri-state: true → ensure the load's setting is on; false → ensure off; undefined → leave it.
+    if (gang.forwardRemote !== undefined) {
       const def = findForwardSetting(paramsByNode[gang.load] ?? []);
+      const desired = gang.forwardRemote ? 1 : 0;
       if (!def) {
-        issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "NO_SETTING", message: `#${gang.load} "${label(load)}" has no "forward Z-Wave commands" setting — app/automation changes won't propagate to companions on this device.` });
-      } else if (def.value === 1) {
+        if (gang.forwardRemote) issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "NO_SETTING", message: `#${gang.load} "${label(load)}" has no "forward Z-Wave commands" setting — app/automation changes won't propagate to companions on this device.` });
+      } else if (def.value === desired) {
         satisfied++;
       } else {
-        const desiredLabel = def.options?.find((o) => o.value === 1)?.label ?? "Enable";
+        const desiredLabel = def.options?.find((o) => o.value === desired)?.label ?? String(desired);
         const currentLabel = def.options?.find((o) => o.value === def.value)?.label ?? String(def.value);
-        paramActions.push({ policy: gang.name, node: gang.load, param: def.param, key: def.key, label: def.label, current: def.value, currentLabel, desired: 1, desiredLabel });
+        paramActions.push({ policy: gang.name, node: gang.load, param: def.param, key: def.key, label: def.label, current: def.value, currentLabel, desired, desiredLabel });
       }
     }
   }

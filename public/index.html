@@ -521,7 +521,11 @@
           if (!name || !load || !companions.length || !capsArr.length) { toast("Need a name, load, ≥1 companion, ≥1 behavior"); return; }
           const gang = { name, load, companions };
           if (m.querySelector("#gLed").checked) gang.ledSync = true;
-          if (m.querySelector("#gFwd").checked) gang.forwardRemote = true;
+          // Tri-state: checked → ensure on; was-on-now-unchecked → ensure off (disables on Sync);
+          // never engaged → leave unmanaged (don't force-disable unrelated loads).
+          const fwd = m.querySelector("#gFwd").checked;
+          if (fwd) gang.forwardRemote = true;
+          else if (existing?.forwardRemote) gang.forwardRemote = false;
           const match = (S.presets || []).find((p) => sameSet(p.capabilities, capsArr));
           if (match) gang.profile = match.id; else gang.capabilities = capsArr;
           const gangs = (S.topology.gangs || []).slice();
