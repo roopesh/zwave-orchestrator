@@ -93,6 +93,12 @@ export function analyzeDevices(nodes: NodeWithSupport[], registry: DeviceRegistr
   return { status, removed, repairCandidates };
 }
 
+/** Drop a registry entry that's no longer on the mesh (and isn't coming back under a new id —
+ *  see remapNodeId for that case). Pure/no I/O so it's trivially testable; the caller persists. */
+export function forgetDevice(registry: DeviceRegistry, id: number): DeviceRegistry {
+  return { devices: registry.devices.filter((d) => d.id !== id) };
+}
+
 /** Re-pair remap: point every reference to `from` at `to` across gangs, policies, and the
  *  registry (in place). Used when a device was excluded and re-included under a new node id. */
 export function remapNodeId(from: number, to: number, newFingerprint: string, topo: Topology, policies: PolicyDoc, registry: DeviceRegistry): void {

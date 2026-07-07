@@ -126,3 +126,31 @@ test("computePlan forwardRemote: satisfied when already enabled, warns when devi
   assert.equal(plan2.paramActions.length, 0);
   assert.equal(plan2.issues.filter((i) => i.code === "NO_SETTING").length, 1);
 });
+
+test("computePlan force:true re-issues already-satisfied associations and params (redeploy doesn't trust the diff)", async () => {
+  const a = new MockAdapter([{ id: 1, isController: true }, { id: 26, params: p59(1, 1) }, { id: 20, assoc: wired(26) }]);
+  const t: Topology = { defaults: { profile: "full" }, gangs: [{ name: "Hall", load: 26, companions: [{ node: 20 }], profile: "full", forwardRemote: true }] };
+  const normal = await computePlan(a, t);
+  assert.equal(normal.actions.length, 0);
+  assert.equal(normal.paramActions.length, 0);
+  assert.ok(normal.satisfied > 0);
+
+  const forced = await computePlan(a, t, { force: true });
+  assert.equal(forced.actions.length, 3); // onoff/level/dim links from wired(26), all already-linked, all re-issued
+  assert.equal(forced.paramActions.length, 1);
+  assert.equal(forced.paramActions[0].desired, 1);
+  assert.ok(forced.satisfied > 0); // still counted as satisfied, just also re-applied
+});
+
+test("computeParamPlan force:true re-issues an already-matching policy setting", async () => {
+  const a = new MockAdapter([{ id: 2, params: p59(1, 1) }]);
+  const doc = { policies: [{ name: "F", targets: [2], settings: [{ param: 59, key: 2, value: 1 }] }] };
+  const normal = await computeParamPlan(a, doc);
+  assert.equal(normal.actions.length, 0);
+  assert.equal(normal.satisfied, 1);
+
+  const forced = await computeParamPlan(a, doc, undefined, undefined, { force: true });
+  assert.equal(forced.actions.length, 1);
+  assert.equal(forced.actions[0].desired, 1);
+  assert.equal(forced.satisfied, 1);
+});

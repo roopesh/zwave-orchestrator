@@ -16,7 +16,7 @@ import { applyActions } from "../topology/executor.ts";
 import { CAPABILITIES, PRESETS, deviceCapabilities } from "../topology/capabilities.ts";
 import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies.ts";
 import { discoverGangs } from "../topology/discover.ts";
-import { analyzeDevices, fingerprintOf, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
+import { analyzeDevices, fingerprintOf, forgetDevice, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import type { NodeDump } from "../types.ts";
 
@@ -87,7 +87,8 @@ async function buildNodes(adapter: ZWaveAdapter): Promise<UiNode[]> {
       try {
         const [groups, associations] = await Promise.all([adapter.getAssociationGroups({ nodeId: n.id }), adapter.getAssociations({ nodeId: n.id })]);
         return { ...n, groups, associations, supports: deviceCapabilities(groups) };
-      } catch {
+      } catch (e: any) {
+        log(`WARN #${n.id} "${n.name || n.product}" failed to read groups/associations: ${e?.message ?? e} — treated as having none, which can make plans look wrong for this node`);
         return { ...n, groups: [], associations: {}, supports: [] };
       }
     }),
@@ -114,6 +115,19 @@ function json(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data);
   res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
   res.end(body);
+}
+
+// Every mutating request logs what it computed and the outcome of every device write — this is
+// what launchd's StandardOutPath captures, so "did it actually do anything" is answerable after the fact.
+function log(msg: string): void {
+  process.stdout.write(`[${new Date().toISOString()}] ${msg}\n`);
+}
+function logResults(label: string, results: { ok: boolean; error?: string; action: any }[]): void {
+  for (const r of results) {
+    const a = r.action;
+    const what = "kind" in a ? `${a.kind} #${a.source} group ${a.group} -> #${a.target}` : `param #${a.node} p${a.param}${a.key != null ? `[${a.key}]` : ""} -> ${a.desired}`;
+    log(`  ${r.ok ? "OK  " : "FAIL"} ${label} ${what}${r.error ? ` (${r.error})` : ""}`);
+  }
 }
 function readBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve) => {
@@ -159,18 +173,21 @@ async function main(): Promise<void> {
       if (path === "/api/apply" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "add"));
       if (path === "/api/teardown" && req.method === "POST") return void (await handleWrite(hub, res, await readBody(req), "remove"));
       if (path === "/api/reconcile" && req.method === "POST") return void (await handleReconcile(hub, res, await readBody(req)));
+      if (path === "/api/redeploy" && req.method === "POST") return void (await handleRedeploy(hub, res));
       if (path === "/api/gangs" && req.method === "POST") return void (await handleSaveGangs(hub, res, await readBody(req)));
       if (path === "/api/discover" && req.method === "GET") return void (await handleDiscover(hub, res));
       if (path === "/api/params" && req.method === "GET") return void (await handleParams(hub, res));
       if (path === "/api/params/apply" && req.method === "POST") return void (await handleParamsApply(hub, res, await readBody(req)));
       if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
       if (path === "/api/devices" && req.method === "POST") return void (await handleSaveDevices(res, await readBody(req)));
+      if (path === "/api/devices/forget" && req.method === "POST") return void (await handleForgetDevice(res, await readBody(req)));
       if (path === "/api/remap" && req.method === "POST") return void (await handleRemap(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
       if (path.startsWith("/api/")) return void json(res, 404, { error: "unknown endpoint" });
       return void (await serveStatic(res, path));
     } catch (e: any) {
+      log(`ERROR ${req.method} ${path}: ${e?.stack ?? e?.message ?? String(e)}`);
       json(res, 500, { error: e?.message ?? String(e) });
     }
   });
@@ -200,9 +217,15 @@ async function handleWrite(hub: Hub, res: ServerResponse, body: any, mode: "add"
   const adapter = await hub.ensure();
   const topology = loadTopology(GANGS_FILE);
   const plan = mode === "add" ? await computePlan(adapter, topology) : await computeTeardown(adapter, topology);
-  const results: any[] = await applyActions(adapter, filterActions(plan.actions, body));
+  const filtered = filterActions(plan.actions, body);
+  log(`${mode === "add" ? "APPLY" : "TEARDOWN"} gang=${body?.gang ?? "*"} node=${body?.node ?? "*"}: ${filtered.length}/${plan.actions.length} action(s) matched filter`);
+  const results: any[] = await applyActions(adapter, filtered);
+  logResults(mode, results);
   if (mode === "add" && plan.paramActions.length) {
-    results.push(...(await applyParamActions(adapter, filterGangParamActions(plan.paramActions, body))));
+    const pfiltered = filterGangParamActions(plan.paramActions, body);
+    const paramResults = await applyParamActions(adapter, pfiltered);
+    logResults("apply-param", paramResults);
+    results.push(...paramResults);
   }
   const after = await computePlan(adapter, topology); // fresh plan reflecting the writes
   json(res, 200, { results, plan: after });
@@ -212,15 +235,65 @@ async function handleReconcile(hub: Hub, res: ServerResponse, body: any): Promis
   const adapter = await hub.ensure();
   const topology = loadTopology(GANGS_FILE);
   const addPlan = await computePlan(adapter, topology);
-  const addResults: any[] = await applyActions(adapter, filterActions(addPlan.actions, body));
+  const addFiltered = filterActions(addPlan.actions, body);
+  log(`RECONCILE gang=${body?.gang ?? "*"} node=${body?.node ?? "*"}: ${addFiltered.length} add / ${addPlan.paramActions.length} param action(s) matched filter`);
+  const addResults: any[] = await applyActions(adapter, addFiltered);
+  logResults("reconcile-add", addResults);
   if (addPlan.paramActions.length) {
-    addResults.push(...(await applyParamActions(adapter, filterGangParamActions(addPlan.paramActions, body))));
+    const paramResults = await applyParamActions(adapter, filterGangParamActions(addPlan.paramActions, body));
+    logResults("reconcile-param", paramResults);
+    addResults.push(...paramResults);
   }
   const stalePlan = await computeStale(adapter, topology);
-  const remResults = await applyActions(adapter, filterActions(stalePlan.actions, body));
+  const remFiltered = filterActions(stalePlan.actions, body);
+  log(`RECONCILE stale: ${remFiltered.length} remove action(s) matched filter`);
+  const remResults = await applyActions(adapter, remFiltered);
+  logResults("reconcile-remove", remResults);
   const after = await computePlan(adapter, topology);
   const afterStale = await computeStale(adapter, topology);
   json(res, 200, { results: [...addResults, ...remResults], plan: after, stale: afterStale.actions });
+}
+
+/** One-shot "make reality match gangs.yaml + policies.yaml", no filtering, no diagnosis required. */
+async function handleRedeploy(hub: Hub, res: ServerResponse): Promise<void> {
+  const adapter = await hub.ensure();
+  const topology = loadTopology(GANGS_FILE);
+  const doc = loadPolicies(POLICIES_FILE);
+  log("REDEPLOY starting (force: reapplying every declared setting)");
+
+  // force: true — re-issue every declared association/setting rather than trusting the diff.
+  // A "redeploy" exists precisely so a stale/incorrect read of current state can't cause silent no-ops.
+  const addPlan = await computePlan(adapter, topology, { force: true });
+  const assocResults: any[] = await applyActions(adapter, addPlan.actions);
+  logResults("redeploy-assoc", assocResults);
+  const gangParamResults = addPlan.paramActions.length ? await applyParamActions(adapter, addPlan.paramActions) : [];
+  logResults("redeploy-gang-param", gangParamResults);
+
+  const stalePlan = await computeStale(adapter, topology);
+  const staleResults = await applyActions(adapter, stalePlan.actions);
+  logResults("redeploy-stale-remove", staleResults);
+  assocResults.push(...staleResults);
+
+  const paramPlan = await computeParamPlan(adapter, doc, topology, undefined, { force: true });
+  const policyParamResults = paramPlan.actions.length ? await applyParamActions(adapter, paramPlan.actions) : [];
+  logResults("redeploy-policy-param", policyParamResults);
+
+  const plan = await computePlan(adapter, topology);
+  const stale = await computeStale(adapter, topology);
+  const afterParamPlan = await computeParamPlan(adapter, doc, topology);
+
+  const failed = [...assocResults, ...gangParamResults, ...policyParamResults].filter((r) => !r.ok).length;
+  log(`REDEPLOY done: ${assocResults.length} assoc, ${gangParamResults.length} gang-param, ${policyParamResults.length} policy-param, ${failed} failed`);
+
+  json(res, 200, {
+    associations: assocResults.length,
+    gangParams: gangParamResults.length,
+    policyParams: policyParamResults.length,
+    failed,
+    plan,
+    stale: stale.actions,
+    paramPlan: afterParamPlan,
+  });
 }
 
 async function handleParams(hub: Hub, res: ServerResponse): Promise<void> {
@@ -246,7 +319,9 @@ async function handleParamsApply(hub: Hub, res: ServerResponse, body: any): Prom
   let actions: ParamAction[] = plan.actions;
   if (body?.policy) actions = actions.filter((a) => a.policy.toLowerCase() === String(body.policy).toLowerCase());
   if (body?.node != null) actions = actions.filter((a) => a.node === Number(body.node));
+  log(`PARAMS-APPLY policy=${body?.policy ?? "*"} node=${body?.node ?? "*"}: ${actions.length}/${plan.actions.length} action(s) matched filter`);
   const results = await applyParamActions(adapter, actions);
+  logResults("params-apply", results);
   const after = await computeParamPlan(adapter, doc, topology);
   json(res, 200, { results, plan: after });
 }
@@ -254,6 +329,7 @@ async function handleParamsApply(hub: Hub, res: ServerResponse, body: any): Prom
 async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Promise<void> {
   const doc = body?.policies ? ({ policies: body.policies } as PolicyDoc) : null;
   if (!doc) return void json(res, 400, { error: "expected { policies: [...] }" });
+  log(`SAVE-POLICIES: ${doc.policies.map((p) => p.name).join(", ") || "(none)"}`);
   savePolicies(POLICIES_FILE, doc);
   let plan: any = { actions: [], issues: [], satisfied: 0 };
   if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc, loadTopology(GANGS_FILE));
@@ -268,6 +344,7 @@ async function handleRemap(hub: Hub, res: ServerResponse, body: any): Promise<vo
   const topo = loadTopology(GANGS_FILE);
   const policies = loadPolicies(POLICIES_FILE);
   const registry = loadDevices(DEVICES_FILE);
+  log(`REMAP #${from} -> #${to} (fingerprint=${newNode ? fingerprintOf(newNode) : "unknown"})`);
   remapNodeId(from, to, newNode ? fingerprintOf(newNode) : "", topo, policies, registry);
   saveTopology(GANGS_FILE, topo);
   savePolicies(POLICIES_FILE, policies);
@@ -281,6 +358,17 @@ async function handleSaveDevices(res: ServerResponse, body: any): Promise<void> 
   json(res, 200, { ok: true, devices: body.devices });
 }
 
+async function handleForgetDevice(res: ServerResponse, body: any): Promise<void> {
+  const id = Number(body?.id);
+  if (!id) return void json(res, 400, { error: "expected { id: number }" });
+  const registry = loadDevices(DEVICES_FILE);
+  const before = registry.devices.length;
+  const after = forgetDevice(registry, id);
+  log(`FORGET-DEVICE #${id}: ${before === after.devices.length ? "not in registry (no-op)" : "removed"}`);
+  saveDevices(DEVICES_FILE, after);
+  json(res, 200, { ok: true, devices: after.devices });
+}
+
 async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {
   const adapter = await hub.ensure();
   const discovered = await discoverGangs(adapter);
@@ -291,6 +379,12 @@ async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {
 async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promise<void> {
   const topology = body?.topology as Topology;
   if (!topology?.gangs) return void json(res, 400, { error: "expected { topology: { gangs: [...] } }" });
+  const before = loadTopology(GANGS_FILE).gangs.map((g) => g.name);
+  const afterNames = topology.gangs.map((g) => g.name);
+  const removed = before.filter((n) => !afterNames.includes(n));
+  const added = afterNames.filter((n) => !before.includes(n));
+  if (removed.length) log(`SAVE-GANGS removed: ${removed.join(", ")} (config only — device associations are untouched; Teardown or Sync to actually unwire)`);
+  if (added.length) log(`SAVE-GANGS added: ${added.join(", ")}`);
   saveTopology(GANGS_FILE, topology);
   let plan = { actions: [], issues: [], satisfied: 0 } as any;
   if (hub.connected && hub.adapter) plan = await computePlan(hub.adapter, topology);

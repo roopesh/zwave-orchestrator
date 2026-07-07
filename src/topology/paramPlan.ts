@@ -60,12 +60,19 @@ export function resolveTargets(policy: Policy, topo: Topology | undefined, issue
   return [...out].sort((a, b) => a - b);
 }
 
+export interface ParamPlanOptions {
+  /** Re-issue every declared setting even where the current read already matches — for "redeploy". */
+  force?: boolean;
+}
+
 export async function computeParamPlan(
   adapter: AssociationTransport,
   doc: PolicyDoc,
   topo?: Topology,
   paramsByNode?: Record<number, ConfigParam[]>,
+  opts: ParamPlanOptions = {},
 ): Promise<ParamPlan> {
+  const { force = false } = opts;
   const params = paramsByNode ?? (await adapter.getConfigParams());
   const actions: ParamAction[] = [];
   const issues: ParamIssue[] = [];
@@ -84,10 +91,9 @@ export async function computeParamPlan(
           issues.push({ severity: "warning", policy: pol.name, node, param: s.param, key: s.key, code: "READ_ONLY", message: `"${def.label}" on #${node} is read-only.` });
           continue;
         }
-        if (def.value === s.value) {
-          satisfied++;
-          continue;
-        }
+        const already = def.value === s.value;
+        if (already) satisfied++;
+        if (already && !force) continue;
         actions.push({ policy: pol.name, node, param: s.param, key: s.key, label: def.label, current: def.value, currentLabel: optLabel(def, def.value), desired: s.value, desiredLabel: optLabel(def, s.value) });
       }
     }

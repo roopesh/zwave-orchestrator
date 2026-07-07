@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { analyzeDevices, fingerprintOf, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
+import { analyzeDevices, fingerprintOf, forgetDevice, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 
 const node = (id: number, over: any = {}) => ({ id, name: "", location: "", product: "Inovelli VZW31-SN", isController: false, isLongRange: false, supports: ["onoff", "level", "dim"], ...over });
 
@@ -62,6 +62,24 @@ test("remapNodeId repoints a load", () => {
   const topo: any = { defaults: {}, gangs: [{ name: "K", load: 12, companions: [{ node: 5 }] }] };
   remapNodeId(12, 40, "fp", topo, { policies: [] }, { devices: [] });
   assert.equal(topo.gangs[0].load, 40);
+});
+
+test("forgetDevice drops only the named entry, leaves the rest untouched", () => {
+  const reg = { devices: [
+    { id: 2, fingerprint: "a", disposition: "adopted" as const },
+    { id: 12, fingerprint: "gone", disposition: "adopted" as const },
+    { id: 5, fingerprint: "b", disposition: "ignored" as const },
+  ] };
+  const after = forgetDevice(reg, 12);
+  assert.deepEqual(after.devices.map((d) => d.id), [2, 5]);
+  // original untouched (pure function)
+  assert.equal(reg.devices.length, 3);
+});
+
+test("forgetDevice on an id not present is a no-op", () => {
+  const reg = { devices: [{ id: 2, fingerprint: "a", disposition: "adopted" as const }] };
+  const after = forgetDevice(reg, 999);
+  assert.deepEqual(after.devices, reg.devices);
 });
 
 test("registry round-trips through yaml", () => {

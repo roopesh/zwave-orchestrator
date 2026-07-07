@@ -110,7 +110,14 @@ function findForwardSetting(list: ConfigParam[]): ConfigParam | undefined {
   return list.find((p) => p.writeable && /forward/i.test(p.label) && /z.?wave/i.test(p.label));
 }
 
-export async function computePlan(adapter: AssociationTransport, topo: Topology): Promise<Plan> {
+export interface PlanOptions {
+  /** Re-issue every desired association/setting even where the current read already matches —
+   *  for "redeploy": don't trust the diff, just make reality match the declared topology. */
+  force?: boolean;
+}
+
+export async function computePlan(adapter: AssociationTransport, topo: Topology, opts: PlanOptions = {}): Promise<Plan> {
+  const { force = false } = opts;
   const nodes = await adapter.getNodes();
   const byId = new Map<number, ZNode>(nodes.map((n) => [n.id, n]));
   const read = makeReader(adapter);
@@ -160,11 +167,11 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
           issues.push({ severity: "error", gang: gang.name, node: comp.node, code: "NO_GROUP", message: `#${comp.node} does not advertise association group ${gid}` });
           continue;
         }
-        if (isLinkedTo(current[gid], gang.load)) {
+        const linked = isLinkedTo(current[gid], gang.load);
+        if (linked) {
           satisfied++;
-          continue;
-        }
-        if ((current[gid] ?? []).length >= g.maxNodes) {
+          if (!force) continue;
+        } else if ((current[gid] ?? []).length >= g.maxNodes) {
           issues.push({ severity: "warning", gang: gang.name, node: comp.node, code: "GROUP_FULL", message: `group ${gid} "${g.label}" on #${comp.node} is full (max ${g.maxNodes})` });
           continue;
         }
@@ -181,8 +188,14 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
         for (const comp of gang.companions) {
           const src = byId.get(comp.node);
           if (!src || src.isLongRange) continue;
-          if (isLinkedTo(ctx.current, comp.node)) { satisfied++; continue; }
-          if (ctx.current.length >= ctx.group.maxNodes) { issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "GROUP_FULL", message: `the load's brightness group is full (max ${ctx.group.maxNodes}) — can't add more LED-sync links` }); break; }
+          const linked = isLinkedTo(ctx.current, comp.node);
+          if (linked) {
+            satisfied++;
+            if (!force) continue;
+          } else if (ctx.current.length >= ctx.group.maxNodes) {
+            issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "GROUP_FULL", message: `the load's brightness group is full (max ${ctx.group.maxNodes}) — can't add more LED-sync links` });
+            break;
+          }
           actions.push({ kind: "add", gang: gang.name, source: gang.load, group: ctx.gid, groupLabel: ctx.group.label, target: comp.node });
         }
       }
@@ -195,12 +208,14 @@ export async function computePlan(adapter: AssociationTransport, topo: Topology)
       const desired = gang.forwardRemote ? 1 : 0;
       if (!def) {
         if (gang.forwardRemote) issues.push({ severity: "warning", gang: gang.name, node: gang.load, code: "NO_SETTING", message: `#${gang.load} "${label(load)}" has no "forward Z-Wave commands" setting — app/automation changes won't propagate to companions on this device.` });
-      } else if (def.value === desired) {
-        satisfied++;
       } else {
-        const desiredLabel = def.options?.find((o) => o.value === desired)?.label ?? String(desired);
-        const currentLabel = def.options?.find((o) => o.value === def.value)?.label ?? String(def.value);
-        paramActions.push({ policy: gang.name, node: gang.load, param: def.param, key: def.key, label: def.label, current: def.value, currentLabel, desired, desiredLabel });
+        const already = def.value === desired;
+        if (already) satisfied++;
+        if (!already || force) {
+          const desiredLabel = def.options?.find((o) => o.value === desired)?.label ?? String(desired);
+          const currentLabel = def.options?.find((o) => o.value === def.value)?.label ?? String(def.value);
+          paramActions.push({ policy: gang.name, node: gang.load, param: def.param, key: def.key, label: def.label, current: def.value, currentLabel, desired, desiredLabel });
+        }
       }
     }
   }
