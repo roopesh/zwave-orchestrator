@@ -91,6 +91,7 @@
       <div class="status"><span class="dot" id="dot"></span><span id="connText">connecting…</span></div>
       <button class="ghost sm" id="btnDevices">Devices</button>
       <button class="ghost sm" id="btnRefresh">Refresh</button>
+      <button class="primary sm" id="btnRedeploy" title="Force re-apply every declared association and parameter, regardless of what the diff thinks is already correct. Slower than Sync, but doesn't depend on trusting a read.">Redeploy everything</button>
       <button class="ghost sm" id="btnSettings">Settings</button>
     </header>
     <main>
@@ -111,9 +112,11 @@
         </div>
         <div id="deviceInbox"></div>
         <div id="removedBanner"></div>
+        <input id="gangSearch" placeholder='Search gangs… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div id="gangs"></div>
 
         <h2>Nodes</h2>
+        <input id="nodeSearch" placeholder='Search nodes… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div class="card"><div id="nodes"></div></div>
       </div>
 
@@ -126,9 +129,11 @@
             <button class="primary sm" id="btnNewPolicy">+ New policy</button>
           </div>
         </div>
+        <input id="policySearch" placeholder='Search policies… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div id="policies"></div>
 
         <h2>Where devices differ</h2>
+        <input id="driftSearch" placeholder='Search parameters or models… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div class="card"><div id="paramBrowse"></div></div>
       </div>
     </main>
@@ -181,11 +186,19 @@
         renderNodes();
       }
 
+      // fingerprint = "product|location|name" (see fingerprintOf) — build a human label from it.
+      function fpLabel(fp) {
+        const [product, location, name] = String(fp || "").split("|");
+        return `${location ? "[" + location + "] " : ""}${name || product || "?"}`;
+      }
+
       // Surface untriaged ("new") devices and keep the Devices button's new-count fresh.
       function renderDeviceInbox() {
         const el = $("#deviceInbox");
         const newOnes = (S.nodes || []).filter((n) => !n.isController && n.device?.disposition === "new");
         const repairs = S.deviceChanges?.repairCandidates || [];
+        const removed = S.deviceChanges?.removed || [];
+        const repairedFromIds = new Set(repairs.map((rc) => rc.from.id));
         const btn = $("#btnDevices");
         if (btn) btn.textContent = newOnes.length ? `Devices · ${newOnes.length} new` : "Devices";
         if (!el) return;
@@ -194,9 +207,20 @@
         for (const rc of repairs) {
           html += `<div class="card" style="border-color:rgba(230,182,76,.45)"><b>Re-paired device?</b> <span class="sub">#${rc.from.id} is gone and #${rc.to} appeared with the same name & product.</span><div style="margin-top:10px"><button class="sm" data-remap="${rc.from.id}:${rc.to}">Remap #${rc.from.id} → #${rc.to} (updates gangs, policies, adoption)</button></div></div>`;
         }
+        if (removed.length) {
+          const rows = removed.map((d) => `<div class="row between" style="padding:3px 0"><span class="sub">#${d.id} ${esc(fpLabel(d.fingerprint))}${repairedFromIds.has(d.id) ? " — re-pair suggested above" : ""}</span><button type="button" class="sm ghost" data-forget="${d.id}">Forget</button></div>`).join("");
+          html += `<div class="card"><b>${removed.length} device(s)</b> in the registry are no longer on the mesh. "Forget" just clears the local record — it doesn't touch anything on the mesh.${rows}</div>`;
+        }
         el.innerHTML = html;
         const r = document.getElementById("btnReviewDevices");
         if (r) r.onclick = openDeviceManager;
+        el.querySelectorAll("[data-forget]").forEach((b) => (b.onclick = async () => {
+          const id = Number(b.dataset.forget);
+          if (!confirm(`Forget device #${id}? This only clears it from the local registry (devices.yaml) — it has no effect on the mesh or on any gang/policy.`)) return;
+          await api("/api/devices/forget", "POST", { id });
+          toast(`Forgot #${id}`);
+          await loadState();
+        }));
         el.querySelectorAll("[data-remap]").forEach((b) => (b.onclick = async () => {
           const [from, to] = b.dataset.remap.split(":").map(Number);
           toast("Remapping…");
@@ -234,8 +258,8 @@
         };
 
         const paint = () => {
-          const q = (m.querySelector("#dmSearch")?.value || "").toLowerCase();
-          const list = nodes.filter((n) => matchFilter(n) && (!q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q)));
+          const q = m.querySelector("#dmSearch")?.value || "";
+          const list = nodes.filter((n) => matchFilter(n) && matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.product}`, q));
           const byRoom = {};
           for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
           m.querySelector("#dmBody").innerHTML = Object.keys(byRoom).sort().map((room) => {
@@ -332,9 +356,19 @@
 
       function renderGangs() {
         const el = $("#gangs");
-        const gangs = S.topology.gangs || [];
-        if (!gangs.length) {
+        const all = S.topology.gangs || [];
+        if (!all.length) {
           el.innerHTML = `<div class="card empty">No gangs yet. Click <b>+ New gang</b> to group a load switch with its companions.</div>`;
+          return;
+        }
+        const q = $("#gangSearch")?.value || "";
+        const haystackOf = (g) => {
+          const compIds = g.companions.map((c) => (typeof c === "number" ? c : c.node));
+          return [g.name, `#${g.load}`, nodeLabel(nodeById(g.load)), ...compIds.map((id) => `#${id} ${nodeLabel(nodeById(id))}`), ...effCaps(g).map(capTitle)].join(" ");
+        };
+        const gangs = all.filter((g) => matchesSearch(haystackOf(g), q));
+        if (!gangs.length) {
+          el.innerHTML = `<div class="card empty">No gangs match your search.</div>`;
           return;
         }
         el.innerHTML = gangs.map((g) => {
@@ -368,7 +402,6 @@
               <div class="spacer" style="flex:1"></div>
               <button class="sm" data-edit="${esc(g.name)}">Edit</button>
               <button class="sm primary" data-sync="${esc(g.name)}" title="Add missing links and remove any not in this setup">Sync</button>
-              <button class="sm ghost" data-teardown="${esc(g.name)}" title="Remove all of this gang's associations. Note: Sync re-adds them — to permanently un-associate a switch, remove it from the gang (Edit) then Sync.">Teardown</button>
             </div>
             <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
             ${comps}
@@ -379,23 +412,57 @@
       }
 
       function renderNodes() {
-        const rows = (S.nodes || []).map((n) => `<tr>
+        const q = $("#nodeSearch")?.value || "";
+        const nodes = (S.nodes || []).filter((n) => matchesSearch(`#${n.id} ${n.location || ""} ${n.name || ""} ${n.product || ""}`, q));
+        const rows = nodes.map((n) => `<tr>
           <td>#${n.id}</td><td>${esc(n.location || "")}</td><td>${esc(n.name || "")}</td>
           <td class="sub">${esc(n.product || "")}</td>
           <td>${n.isController ? '<span class="badge">controller</span>' : ""}${n.isLongRange ? ' <span class="badge lr">Long Range</span>' : ""}</td>
-        </tr>`).join("");
+        </tr>`).join("") || `<tr><td colspan="5" class="sub">No nodes match your search.</td></tr>`;
         $("#nodes").innerHTML = `<table><thead><tr><th>ID</th><th>Location</th><th>Name</th><th>Product</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
       }
 
       const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+      // Shared search matching, used by every search box in the app: space-separated terms are
+      // AND'd regardless of order ("kitchen remote" matches "Remote Kitchen Counter Lights");
+      // "quoted phrases" match as one literal substring. Empty/whitespace query matches everything.
+      function parseSearchTerms(q) {
+        const terms = [];
+        const re = /"([^"]*)"|(\S+)/g;
+        let m;
+        while ((m = re.exec(q))) {
+          const t = (m[1] !== undefined ? m[1] : m[2]).trim().toLowerCase();
+          if (t) terms.push(t);
+        }
+        return terms;
+      }
+      function matchesSearch(haystack, q) {
+        if (!q || !q.trim()) return true;
+        const hay = haystack.toLowerCase();
+        return parseSearchTerms(q).every((t) => hay.includes(t));
+      }
+
       // ---- writes ----
-      async function doWrite(kind, filter) {
-        const path = kind === "add" ? "/api/apply" : kind === "remove" ? "/api/teardown" : "/api/reconcile";
-        toast(kind === "sync" ? "Syncing…" : kind === "add" ? "Applying…" : "Removing…");
-        const r = await api(path, "POST", filter || {});
-        const failed = (r.results || []).filter((x) => !x.ok).length;
-        toast(`${(r.results || []).length - failed} change(s)${failed ? ", " + failed + " failed" : ""}`);
+      // Full server response always goes to the console (with per-action results and any errors) —
+      // the toast is just a summary. Open devtools if a count looks wrong; the detail is right there.
+      async function doWrite(filter) {
+        toast("Syncing…");
+        const r = await api("/api/reconcile", "POST", filter || {});
+        console.log("[/api/reconcile]", r);
+        const results = r.results || [];
+        const failed = results.filter((x) => !x.ok);
+        if (failed.length) console.error(`[/api/reconcile] ${failed.length} failed:`, failed);
+        toast(`${results.length - failed.length} change(s)${failed.length ? ", " + failed.length + " failed — see console" : ""}`);
+        await loadState();
+      }
+
+      async function doRedeploy() {
+        toast("Redeploying everything — reapplying every setting, not just diffs…");
+        const r = await api("/api/redeploy", "POST");
+        console.log("[/api/redeploy]", r);
+        const n = (r.associations || 0) + (r.gangParams || 0) + (r.policyParams || 0);
+        toast(n ? `${n} setting(s) reapplied${r.failed ? ", " + r.failed + " FAILED — see console" : ""}` : "Nothing declared to apply");
         await loadState();
       }
 
@@ -456,11 +523,11 @@
           const load = Number(m.querySelector("#gLoad").value);
           checked.delete(load);
           const box = m.querySelector("#gComps");
-          const q = (m.querySelector("#gCompSearch")?.value || "").toLowerCase();
+          const q = m.querySelector("#gCompSearch")?.value || "";
           const showAll = m.querySelector("#gShowAll")?.checked;
           const list = nodes.filter((n) => n.id !== load
             && (showAll || (n.device ? n.device.groupEligible : true))
-            && (!q || `#${n.id} ${n.location} ${n.name} ${n.product}`.toLowerCase().includes(q)));
+            && matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.product}`, q));
           const byRoom = {};
           for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
           box.innerHTML = Object.keys(byRoom).sort().map((room) =>
@@ -513,7 +580,27 @@
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
           if (m.returnValue === "cancel" || !m.returnValue) return;
-          if (m.returnValue === "delete") { await saveGangs((S.topology.gangs || []).filter((x) => x.name !== existing.name)); return; }
+          if (m.returnValue === "delete") {
+            // Delete means gone: unwire the devices first, then drop it from config. If any link
+            // fails to unwire, STOP — removing it from config anyway would make that leftover
+            // association invisible to Sync forever (it only scans loads still in the topology).
+            toast("Deleting — unwiring devices…");
+            const r = await api("/api/teardown", "POST", { gang: existing.name });
+            console.log("[delete->teardown]", r);
+            const failed = (r.results || []).filter((x) => !x.ok);
+            if (failed.length) {
+              console.error("[delete->teardown] failed:", failed);
+              const detail = failed.map((f) => `#${f.action.source} group ${f.action.group} -> #${f.action.target}: ${f.error || "unknown error"}`).join("\n");
+              const proceed = confirm(
+                `${failed.length} association(s) could NOT be unwired:\n\n${detail}\n\n` +
+                `Removing this gang from config anyway will leave those associations on the devices, permanently invisible to Sync (it stops watching a load once its gang is gone).\n\n` +
+                `OK = remove from config anyway (leftover wiring stays, unmanaged).\nCancel = keep the gang, fix the device issue, then delete again.`,
+              );
+              if (!proceed) { toast("Delete cancelled — gang kept in config"); await loadState(); return; }
+            }
+            await saveGangs((S.topology.gangs || []).filter((x) => x.name !== existing.name));
+            return;
+          }
           const name = m.querySelector("#gName").value.trim();
           const load = Number(m.querySelector("#gLoad").value);
           const companions = checkedComps().filter((id) => id !== load);
@@ -654,8 +741,17 @@
 
       function renderPolicies() {
         const el = $("#policies");
-        const pols = P.policies || [];
-        if (!pols.length) { el.innerHTML = `<div class="card empty">No policies yet. Click <b>+ New policy</b> to define parameter values and push them to your switches.</div>`; return; }
+        const all = P.policies || [];
+        if (!all.length) { el.innerHTML = `<div class="card empty">No policies yet. Click <b>+ New policy</b> to define parameter values and push them to your switches.</div>`; return; }
+        const q = $("#policySearch")?.value || "";
+        const haystackOf = (pol) => {
+          const settingLabels = pol.settings.map((s) => { const def = paramDefAny(s.param, s.key, pol.targets); return def ? def.label : `p${s.param}`; }).join(" ");
+          const gangNames = (pol.gangTargets || []).map((gt) => gt.gang).join(" ");
+          const targetLabels = pol.targets.map((id) => `#${id} ${pShort(id)}`).join(" ");
+          return `${pol.name} ${settingLabels} ${gangNames} ${targetLabels}`;
+        };
+        const pols = all.filter((pol) => matchesSearch(haystackOf(pol), q));
+        if (!pols.length) { el.innerHTML = `<div class="card empty">No policies match your search.</div>`; return; }
         el.innerHTML = pols.map((pol) => {
           const acts = (P.plan.actions || []).filter((a) => a.policy === pol.name);
           const issues = (P.plan.issues || []).filter((i) => i.policy === pol.name);
@@ -681,6 +777,8 @@
 
       function renderParamBrowse() {
         const el = $("#paramBrowse");
+        const q = $("#driftSearch")?.value || "";
+        const searching = !!q.trim();
         const nodes = (P.nodes || []).filter((n) => !n.isController && (P.params[n.id] || []).length);
         const byModel = {};
         nodes.forEach((n) => (byModel[n.model] = byModel[n.model] || []).push(n));
@@ -694,23 +792,28 @@
             if (!def || def.writeable === false) continue; // skip read-only diagnostics (e.g. Internal Temperature)
             const distinct = new Set(defs.map((p) => (p ? p.value : "?")));
             if (distinct.size <= 1) continue;
+            if (!matchesSearch(`${model} ${def.label}`, q)) continue;
             const cells = defs.map((p) => `<td class="diff">${p ? esc(valueLabel(def, p.value)) : "—"}</td>`).join("");
             rows.push(`<tr><td>${esc(def.label)}</td>${cells}</tr>`);
           }
+          if (searching && !rows.length) continue; // filtered out entirely, not "in sync" — don't misreport
           const head = ns.map((n) => `<th>#${n.id}<br><span class="sub">${esc(n.location || "")}</span></th>`).join("");
           html += rows.length
             ? `<div class="sub" style="margin:10px 0 4px"><b>${esc(model)}</b> (${ns.length})</div><div style="overflow-x:auto"><table><thead><tr><th>Parameter</th>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
             : `<div class="sub" style="margin:10px 0 4px"><b>${esc(model)}</b> (${ns.length}) — all settings in sync ✓</div>`;
         }
-        el.innerHTML = html || `<div class="empty sub">No devices with parameters.</div>`;
+        el.innerHTML = html || (searching ? `<div class="empty sub">No parameters match your search.</div>` : `<div class="empty sub">No devices with parameters.</div>`);
       }
 
       async function savePolicies(policies) { await api("/api/policies", "POST", { policies }); toast("Saved policies.yaml"); await loadParams(); }
       async function doParamSync(filter) {
         toast("Syncing…");
         const r = await api("/api/params/apply", "POST", filter || {});
-        const failed = (r.results || []).filter((x) => !x.ok).length;
-        toast(`${(r.results || []).length - failed} change(s)${failed ? ", " + failed + " failed" : ""}`);
+        console.log("[/api/params/apply]", r);
+        const results = r.results || [];
+        const failed = results.filter((x) => !x.ok);
+        if (failed.length) console.error("[/api/params/apply] failed:", failed);
+        toast(`${results.length - failed.length} change(s)${failed.length ? ", " + failed.length + " failed — see console" : ""}`);
         await loadParams();
       }
 
@@ -820,8 +923,8 @@
         }
 
         function paintTargets() {
-          const q = (m.querySelector("#pSearch")?.value || "").toLowerCase();
-          const list = nodes.filter((n) => !q || `#${n.id} ${n.location} ${n.name} ${n.model}`.toLowerCase().includes(q));
+          const q = m.querySelector("#pSearch")?.value || "";
+          const list = nodes.filter((n) => matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.model}`, q));
           const byModel = {};
           for (const n of list) (byModel[n.model || "Unknown"] ??= []).push(n);
           const box = m.querySelector("#pTargets");
@@ -885,11 +988,13 @@
       $("#btnSettings").onclick = openSettings;
       $("#btnNewGang").onclick = () => openGangModal(null);
       $("#btnDiscover").onclick = openDiscover;
-      $("#btnSyncAll").onclick = () => doWrite("sync", {});
+      $("#btnSyncAll").onclick = () => doWrite({});
+      $("#btnRedeploy").onclick = doRedeploy;
+      $("#gangSearch").addEventListener("input", renderGangs);
+      $("#nodeSearch").addEventListener("input", renderNodes);
       $("#gangs").addEventListener("click", (e) => {
         const t = e.target.closest("button"); if (!t) return;
-        if (t.dataset.sync) doWrite("sync", { gang: t.dataset.sync });
-        else if (t.dataset.teardown) doWrite("remove", { gang: t.dataset.teardown });
+        if (t.dataset.sync) doWrite({ gang: t.dataset.sync });
         else if (t.dataset.edit) openGangModal((S.topology.gangs || []).find((g) => g.name === t.dataset.edit));
       });
 
@@ -908,6 +1013,8 @@
         openPolicyModal(null, [...led.values()].sort((a, b) => a.param - b.param || (a.key ?? -1) - (b.key ?? -1)), [...tgts]);
       };
       $("#btnSyncAllParams").onclick = () => doParamSync({});
+      $("#policySearch").addEventListener("input", renderPolicies);
+      $("#driftSearch").addEventListener("input", renderParamBrowse);
       $("#policies").addEventListener("click", (e) => {
         const t = e.target.closest("button"); if (!t) return;
         if (t.dataset.psync) doParamSync({ policy: t.dataset.psync });
