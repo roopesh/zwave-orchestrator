@@ -18,6 +18,7 @@ import { loadPolicies, savePolicies, type PolicyDoc } from "../topology/policies
 import { discoverGangs } from "../topology/discover.ts";
 import { analyzeDevices, fingerprintOf, forgetDevice, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
+import { applyCodeActions, computeCodePlan, ensureSlots, findPinLengthParam, importCandidates, loadCodes, saveCodes, validateCodes, type CodeAction, type CodesDoc } from "../topology/codes.ts";
 import type { NodeDump } from "../types.ts";
 
 type UiNode = NodeDump & { supports: string[] };
@@ -26,6 +27,7 @@ const PORT = Number(process.env.PORT ?? 8090);
 const GANGS_FILE = process.env.GANGS_FILE ?? "gangs.yaml";
 const POLICIES_FILE = process.env.POLICIES_FILE ?? "policies.yaml";
 const DEVICES_FILE = process.env.DEVICES_FILE ?? "devices.yaml";
+const CODES_FILE = process.env.CODES_FILE ?? "codes.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
 
 // Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
@@ -181,6 +183,10 @@ async function main(): Promise<void> {
       if (path === "/api/policies" && req.method === "POST") return void (await handleSavePolicies(hub, res, await readBody(req)));
       if (path === "/api/devices" && req.method === "POST") return void (await handleSaveDevices(res, await readBody(req)));
       if (path === "/api/devices/forget" && req.method === "POST") return void (await handleForgetDevice(res, await readBody(req)));
+      if (path === "/api/codes" && req.method === "GET") return void (await handleCodes(hub, res));
+      if (path === "/api/codes" && req.method === "POST") return void (await handleSaveCodes(hub, res, await readBody(req)));
+      if (path === "/api/codes/apply" && req.method === "POST") return void (await handleCodesApply(hub, res));
+      if (path === "/api/codes/delete" && req.method === "POST") return void (await handleCodesDelete(hub, res, await readBody(req)));
       if (path === "/api/remap" && req.method === "POST") return void (await handleRemap(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
@@ -367,6 +373,94 @@ async function handleForgetDevice(res: ServerResponse, body: any): Promise<void>
   log(`FORGET-DEVICE #${id}: ${before === after.devices.length ? "not in registry (no-op)" : "removed"}`);
   saveDevices(DEVICES_FILE, after);
   json(res, 200, { ok: true, devices: after.devices });
+}
+
+// Read-only view of user codes: the doc, locks detected on the mesh, the pending plan (what a
+// future apply WOULD write — not applied here), validation issues, and importable existing codes.
+async function handleCodes(hub: Hub, res: ServerResponse): Promise<void> {
+  const doc = ensureSlots(loadCodes(CODES_FILE));
+  let adapter: ZWaveAdapter;
+  try {
+    adapter = await hub.ensure();
+  } catch {
+    return void json(res, 200, { doc, detectedLocks: [], plan: [], issues: validateCodes(doc), imports: {}, connected: false });
+  }
+  const [nodes, live] = [await adapter.getNodes(), await adapter.getUserCodes()];
+  const label = (id: number) => { const n = nodes.find((x) => x.id === id); return n ? `${n.location ? "[" + n.location + "] " : ""}${n.name || n.product || "#" + id}` : "#" + id; };
+  const detectedLocks = Object.keys(live).map(Number).map((node) => ({ node, label: label(node) }));
+  const plan = computeCodePlan(doc, live);
+  const imports: Record<number, ReturnType<typeof importCandidates>> = {};
+  for (const l of doc.locks) { const c = importCandidates(doc, l, live[l.node] ?? []); if (c.length) imports[l.node] = c; }
+  json(res, 200, { doc, detectedLocks, plan, issues: validateCodes(doc), imports, connected: true });
+}
+
+// Persist codes.yaml. Validates first (bad PIN length / dup / unknown door → 400, nothing saved).
+// Writes to the file only — never to a lock. Logs counts, NEVER a PIN.
+async function handleSaveCodes(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const doc = body?.doc as CodesDoc;
+  if (!doc || !Array.isArray(doc.codes) || !Array.isArray(doc.locks)) return void json(res, 400, { error: "expected { doc: { pinLength, locks, codes } }" });
+  ensureSlots(doc);
+  const issues = validateCodes(doc);
+  if (issues.length) return void json(res, 400, { error: "validation failed", issues });
+  saveCodes(CODES_FILE, doc);
+  log(`SAVE-CODES: ${doc.codes.length} code(s) across ${doc.locks.length} lock(s), pinLength=${doc.pinLength}`);
+  let plan: ReturnType<typeof computeCodePlan> = [];
+  if (hub.connected && hub.adapter) plan = computeCodePlan(doc, await hub.adapter.getUserCodes());
+  json(res, 200, { ok: true, doc, plan, issues: [] });
+}
+
+/** Push codes.yaml to the locks. Enforces the house-wide PIN length first (a change clears that
+ *  lock's existing codes — logged loudly), then applies the diff with read-back verification.
+ *  Logs one line per action WITHOUT the PIN; the API response also omits PINs. */
+async function handleCodesApply(hub: Hub, res: ServerResponse): Promise<void> {
+  const adapter = await hub.ensure();
+  const doc = ensureSlots(loadCodes(CODES_FILE));
+  const issues = validateCodes(doc);
+  if (issues.length) return void json(res, 400, { error: "validation failed", issues });
+  log("CODES-APPLY starting");
+  const params = await adapter.getConfigParams();
+  for (const lock of doc.locks) {
+    const def = findPinLengthParam(params[lock.node] ?? []);
+    if (def && def.value !== doc.pinLength) {
+      log(`CODES-APPLY pinLength ${def.value} -> ${doc.pinLength} on #${lock.node} (this clears that lock's existing codes)`);
+      await adapter.setConfigValue(lock.node, def.param, doc.pinLength, def.key);
+    }
+  }
+  const plan = computeCodePlan(doc, await adapter.getUserCodes());
+  const results = await applyCodeActions(adapter, plan);
+  for (const r of results) log(`  ${r.ok ? "OK  " : "FAIL"} ${r.action.kind} "${r.action.name}" slot ${r.action.slot} on #${r.action.node}${r.error ? ` (${r.error})` : ""}`);
+  const failed = results.filter((r) => !r.ok).length;
+  log(`CODES-APPLY done: ${results.length - failed} applied, ${failed} failed`);
+  const after = computeCodePlan(doc, await adapter.getUserCodes());
+  json(res, 200, { results: results.map((r) => ({ ok: r.ok, kind: r.action.kind, node: r.action.node, slot: r.action.slot, name: r.action.name, error: r.error })), plan: after });
+}
+
+/** Delete a code: clear its slot on every lock first, THEN drop it from the file. If any clear
+ *  fails, refuse to remove it from config (409) unless `force` — mirrors gang delete, so a code
+ *  can't silently linger on a lock while vanishing from management. */
+async function handleCodesDelete(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const name = String(body?.name ?? "");
+  if (!name) return void json(res, 400, { error: "expected { name }" });
+  const adapter = await hub.ensure();
+  const doc = ensureSlots(loadCodes(CODES_FILE));
+  const entry = doc.codes.find((c) => c.name === name);
+  if (!entry) return void json(res, 404, { error: "no such code" });
+  const live = await adapter.getUserCodes();
+  const clears: CodeAction[] = [];
+  for (const lock of doc.locks) {
+    const cur = (live[lock.node] ?? []).find((s) => s.slot === entry.slot);
+    if (cur && cur.status !== 0) clears.push({ kind: "clear", node: lock.node, lockName: lock.name, slot: entry.slot, name, reason: "removed-from-door" });
+  }
+  log(`CODES-DELETE "${name}" slot ${entry.slot}: clearing on ${clears.length} lock(s)`);
+  const results = await applyCodeActions(adapter, clears);
+  for (const r of results) log(`  ${r.ok ? "OK  " : "FAIL"} clear "${name}" slot ${r.action.slot} on #${r.action.node}${r.error ? ` (${r.error})` : ""}`);
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length && !body?.force) {
+    return void json(res, 409, { error: "clear failed", failed: failed.map((r) => ({ node: r.action.node, slot: r.action.slot, error: r.error })) });
+  }
+  doc.codes = doc.codes.filter((c) => c.name !== name);
+  saveCodes(CODES_FILE, doc);
+  json(res, 200, { ok: true, doc });
 }
 
 async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {

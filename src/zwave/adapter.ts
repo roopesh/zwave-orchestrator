@@ -3,10 +3,11 @@
 // MQTT) can be dropped in by implementing the same shape. Envelopes verified live against
 // zwave-js-server 3.9.0 / schema 49.
 
-import type { AssociationAddress, AssociationGroup, AssociationsByGroup, ConfigParam, ZNode } from "../types.ts";
+import type { AssociationAddress, AssociationGroup, AssociationsByGroup, ConfigParam, UserCodeSlot, ZNode } from "../types.ts";
 import { ZwaveClient } from "./client.ts";
 
 const CONFIGURATION_CC = 112;
+const USER_CODE_CC = 99;
 
 export interface AssociationTransport {
   getNodes(): Promise<ZNode[]>;
@@ -123,6 +124,38 @@ export class ZWaveAdapter implements AssociationTransport {
     const valueId: Record<string, unknown> = { commandClass: CONFIGURATION_CC, endpoint: 0, property: param };
     if (key !== undefined) valueId.propertyKey = key;
     const res = await this.client.request("node.set_value", { nodeId, valueId, value });
+    return res?.result?.status ?? -1;
+  }
+
+  /** Read user-code slots (CC 99) for every lock on the mesh, keyed by node id. Read-only.
+   *  Pairs each slot's `userCode` (the PIN) with its `userIdStatus` (0 Available/1 Enabled/2 Disabled). */
+  async getUserCodes(): Promise<Record<number, UserCodeSlot[]>> {
+    const { nodes } = await this.client.startListening();
+    const out: Record<number, UserCodeSlot[]> = {};
+    for (const n of nodes) {
+      const codeVals = (n.values ?? []).filter((v: any) => v.commandClass === USER_CODE_CC && v.property === "userCode" && typeof v.propertyKey === "number");
+      if (!codeVals.length) continue; // not a lock (or exposes no user codes)
+      const statusBySlot = new Map<number, number>();
+      for (const v of n.values ?? []) if (v.commandClass === USER_CODE_CC && v.property === "userIdStatus" && typeof v.propertyKey === "number") statusBySlot.set(v.propertyKey, Number(v.value ?? 0));
+      out[n.nodeId] = codeVals
+        .map((v: any) => ({ slot: v.propertyKey as number, status: statusBySlot.get(v.propertyKey) ?? 0, code: typeof v.value === "string" ? v.value : "" }))
+        .sort((a: UserCodeSlot, b: UserCodeSlot) => a.slot - b.slot);
+    }
+    return out;
+  }
+
+  /** Set a user-code slot's PIN (CC 99). Setting the code also enables the slot. Returns the
+   *  SetValueStatus (255/254 = success). The PIN is never logged by this layer. */
+  async setUserCode(nodeId: number, slot: number, code: string): Promise<number> {
+    const valueId = { commandClass: USER_CODE_CC, endpoint: 0, property: "userCode", propertyKey: slot };
+    const res = await this.client.request("node.set_value", { nodeId, valueId, value: code });
+    return res?.result?.status ?? -1;
+  }
+
+  /** Clear a user-code slot by setting its status to Available (0), which removes the PIN. */
+  async clearUserCode(nodeId: number, slot: number): Promise<number> {
+    const valueId = { commandClass: USER_CODE_CC, endpoint: 0, property: "userIdStatus", propertyKey: slot };
+    const res = await this.client.request("node.set_value", { nodeId, valueId, value: 0 });
     return res?.result?.status ?? -1;
   }
 }

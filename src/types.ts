@@ -66,3 +66,11 @@ export interface NodeDump extends ZNode {
   groups: AssociationGroup[];
   associations: AssociationsByGroup;
 }
+
+/** One user-code slot as read from a lock (Command Class 99). status: 0 Available, 1 Enabled,
+ *  2 Disabled. `code` is the PIN — this lock returns it in the clear (not masked). */
+export interface UserCodeSlot {
+  slot: number;
+  status: number;
+  code: string;
+}

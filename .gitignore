@@ -3,6 +3,8 @@ dist/
 *.log
 # Local connection config (host/port/token) — keep out of the repo
 config/config.json
+# User codes contain plaintext PINs — MUST never be committed
+codes.yaml
 # Editor / tooling local settings (machine-specific paths)
 .claude/settings.local.json
 .claude/launch.json

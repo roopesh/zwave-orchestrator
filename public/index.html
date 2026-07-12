@@ -99,6 +99,7 @@
       <div class="tabs">
         <button class="tab active" data-tab="assoc">Associations</button>
         <button class="tab" data-tab="params">Parameters</button>
+        <button class="tab" data-tab="access">Access</button>
       </div>
 
       <div id="tabAssoc" class="tabpane">
@@ -136,12 +137,24 @@
         <input id="driftSearch" placeholder='Search parameters or models… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div class="card"><div id="paramBrowse"></div></div>
       </div>
+
+      <div id="tabAccess" class="tabpane" hidden>
+        <div class="row between">
+          <h2 style="margin:0">Door Codes</h2>
+          <div class="row">
+            <button class="sm" id="btnSyncCodes" title="Push every code to its locks (and remove ones that shouldn't be there)">Sync to locks</button>
+            <button class="primary sm" id="btnNewCode">+ Add person</button>
+          </div>
+        </div>
+        <div id="codesBody"></div>
+      </div>
     </main>
 
     <dialog id="gangModal"></dialog>
     <dialog id="policyModal"></dialog>
     <dialog id="discoverModal"></dialog>
     <dialog id="deviceModal"></dialog>
+    <dialog id="codeModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -817,6 +830,115 @@
         await loadParams();
       }
 
+      // ---- Access / door codes ----
+      let C = null; // latest /api/codes
+      async function loadCodes() { C = await api("/api/codes"); renderCodes(); }
+
+      function renderCodes() {
+        const el = $("#codesBody");
+        if (!C) { el.innerHTML = ""; return; }
+        if (!C.connected) { el.innerHTML = `<div class="card"><b>Not connected.</b> <span class="sub">Connect to your controller in Settings to manage door codes.</span></div>`; return; }
+        const doc = C.doc;
+        const known = new Set(doc.locks.map((l) => l.node));
+        const newLocks = (C.detectedLocks || []).filter((l) => !known.has(l.node));
+        let html = "";
+
+        // Doors
+        html += `<div class="card"><div class="row between"><b>Doors</b><span class="sub">${doc.locks.length} managed</span></div>`;
+        if (doc.locks.length) html += `<div style="margin-top:6px">${doc.locks.map((l) => `<div class="row between" style="padding:2px 0"><span>${esc(l.name)} <span class="sub">#${l.node}</span></span></div>`).join("")}</div>`;
+        if (newLocks.length) html += `<div class="sub" style="margin-top:8px">Detected, not yet added:</div>` + newLocks.map((l) => `<div class="row between" style="padding:2px 0"><span class="sub">${esc(l.label)} #${l.node}</span><button class="sm" data-addlock="${l.node}" data-locklabel="${esc(l.label)}">Add door</button></div>`).join("");
+        if (!doc.locks.length && !newLocks.length) html += `<div class="sub" style="margin-top:6px">No locks found on the mesh.</div>`;
+        html += `</div>`;
+
+        // PIN length
+        if (doc.locks.length) html += `<div class="card"><div class="row" style="gap:10px; align-items:center; flex-wrap:wrap"><b>PIN length</b><select id="cPinLen">${[4, 5, 6, 7, 8].map((n) => `<option value="${n}" ${doc.pinLength === n ? "selected" : ""}>${n} digits</option>`).join("")}</select><span class="sub">house-wide; changing it means re-entering every PIN</span></div></div>`;
+
+        if ((C.issues || []).length) html += `<div class="card" style="border-color:rgba(230,182,76,.45)"><b>Fix before syncing:</b><div class="sub" style="margin-top:4px">${C.issues.map((i) => esc(i.message)).join("<br>")}</div></div>`;
+
+        const importCount = Object.values(C.imports || {}).reduce((a, list) => a + list.length, 0);
+        if (importCount) html += `<div class="card" style="border-color:rgba(90,169,255,.4)"><b>${importCount} existing code(s)</b> on your locks aren't managed here yet. <button class="sm" id="btnImportCodes">Import them</button></div>`;
+
+        const codes = doc.codes.slice().sort((a, b) => a.slot - b.slot);
+        if (!codes.length) html += `<div class="card empty">No codes yet. Click <b>+ Add person</b>.</div>`;
+        else html += codes.map((c) => {
+          const pending = (C.plan || []).filter((a) => a.slot === c.slot);
+          const status = !c.enabled ? `<span class="chip">disabled</span>` : pending.length ? `<span class="chip warn">${pending.length} pending</span>` : `<span class="chip good">synced</span>`;
+          const doors = c.doors.length ? c.doors.map((d) => esc(d)).join(", ") : "no doors";
+          return `<div class="card"><div class="gang-head"><span class="name">${esc(c.name)}</span> ${status}<div class="spacer" style="flex:1"></div>
+            <label class="sub" style="display:flex;align-items:center;gap:5px"><input type="checkbox" data-toggle="${esc(c.name)}" ${c.enabled ? "checked" : ""} style="width:auto"/> enabled</label>
+            <button class="sm" data-editcode="${esc(c.name)}">Edit</button></div>
+            <div class="sub">Doors: ${doors}</div></div>`;
+        }).join("");
+
+        el.innerHTML = html;
+        const pinLen = $("#cPinLen"); if (pinLen) pinLen.onchange = async (e) => { doc.pinLength = Number(e.target.value); await saveCodesDoc(doc); };
+        el.querySelectorAll("[data-addlock]").forEach((b) => b.onclick = async () => { doc.locks.push({ node: Number(b.dataset.addlock), name: b.dataset.locklabel.replace(/^\[([^\]]*)\].*/, "$1").trim() || b.dataset.locklabel }); await saveCodesDoc(doc); });
+        el.querySelectorAll("[data-toggle]").forEach((cb) => cb.onchange = async () => { const c = doc.codes.find((x) => x.name === cb.dataset.toggle); if (c) { c.enabled = cb.checked; await saveCodesDoc(doc); } });
+        el.querySelectorAll("[data-editcode]").forEach((b) => b.onclick = () => openCodeModal(doc.codes.find((x) => x.name === b.dataset.editcode)));
+        const imp = document.getElementById("btnImportCodes"); if (imp) imp.onclick = importCodes;
+      }
+
+      async function saveCodesDoc(doc) {
+        const r = await api("/api/codes", "POST", { doc });
+        if (r.error) { console.error("[/api/codes]", r); toast(r.issues ? "Fix the highlighted problems" : r.error); }
+        else toast("Saved");
+        await loadCodes();
+      }
+
+      function importCodes() {
+        const doc = C.doc;
+        for (const list of Object.values(C.imports || {})) for (const cand of list) if (!doc.codes.some((c) => c.slot === cand.slot)) doc.codes.push(cand);
+        saveCodesDoc(doc);
+      }
+
+      async function doCodesSync() {
+        toast("Syncing codes to locks…");
+        const r = await api("/api/codes/apply", "POST", {});
+        console.log("[/api/codes/apply]", r);
+        if (r.error) { toast(r.error === "validation failed" ? "Fix the highlighted problems" : r.error); await loadCodes(); return; }
+        const results = r.results || [];
+        const failed = results.filter((x) => !x.ok);
+        if (failed.length) console.error("[/api/codes/apply] failed:", failed);
+        toast(results.length ? `${results.length - failed.length} change(s)${failed.length ? ", " + failed.length + " failed — see console" : ""}` : "Already in sync");
+        await loadCodes();
+      }
+
+      async function deleteCode(name, force) {
+        const r = await api("/api/codes/delete", "POST", { name, force: !!force });
+        if (r.error === "clear failed" && !force) {
+          const detail = (r.failed || []).map((f) => `#${f.node} slot ${f.slot}: ${f.error || "unknown"}`).join("\n");
+          if (confirm(`Couldn't clear this code off ${(r.failed || []).length} lock(s):\n\n${detail}\n\nOK = remove from management anyway (the code may still work on that lock).\nCancel = keep it, fix the lock, try again.`)) return deleteCode(name, true);
+          await loadCodes();
+          return;
+        }
+        toast(r.ok ? "Deleted" : (r.error || "Delete failed"));
+        await loadCodes();
+      }
+
+      function openCodeModal(existing) {
+        const doc = C.doc;
+        const m = $("#codeModal");
+        const c = existing || { name: "", pin: "", enabled: true, doors: [], slot: 0 };
+        const doorChecks = doc.locks.map((l) => `<label style="display:block; margin:3px 0"><input type="checkbox" data-door value="${esc(l.name)}" ${c.doors.includes(l.name) ? "checked" : ""} style="width:auto"/> ${esc(l.name)}</label>`).join("") || `<span class="sub">Add a door first.</span>`;
+        m.innerHTML = `<form method="dialog"><div class="modal-h">${existing ? "Edit" : "Add"} person</div><div class="modal-b">
+          <label class="sub">Name</label><input id="cName" value="${esc(c.name)}" placeholder="e.g. Cleaner"/>
+          <label class="sub" style="margin-top:8px; display:block">PIN (${doc.pinLength} digits)</label><input id="cPin" value="${esc(c.pin)}" inputmode="numeric" maxlength="${doc.pinLength}" placeholder="${"•".repeat(doc.pinLength)}"/>
+          <div class="sub" style="margin-top:12px">Doors</div><div style="margin-top:4px">${doorChecks}</div>
+          </div><div class="modal-f">${existing ? '<button class="ghost danger" value="delete">Delete</button>' : ""}<div class="spacer" style="flex:1"></div><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save</button></div></form>`;
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue === "cancel" || !m.returnValue) return;
+          if (m.returnValue === "delete") { await deleteCode(c.name); return; }
+          const name = m.querySelector("#cName").value.trim();
+          const pin = m.querySelector("#cPin").value.trim();
+          const doors = [...m.querySelectorAll("[data-door]:checked")].map((x) => x.value);
+          if (!name || !pin) { toast("Need a name and a PIN"); return; }
+          if (existing) { c.name = name; c.pin = pin; c.doors = doors; } else doc.codes.push({ name, pin, enabled: true, doors, slot: 0 });
+          await saveCodesDoc(doc);
+        });
+        m.showModal();
+      }
+
       function openPolicyModal(existing, seedParams, seedTargets) {
         const nodes = (P.nodes || []).filter((n) => !n.isController);
         const targets = new Set(existing ? existing.targets : seedTargets || []);
@@ -1003,8 +1125,12 @@
         const tab = t.dataset.tab;
         $("#tabAssoc").hidden = tab !== "assoc";
         $("#tabParams").hidden = tab !== "params";
+        $("#tabAccess").hidden = tab !== "access";
         if (tab === "params" && !P) loadParams();
+        if (tab === "access") loadCodes();
       });
+      $("#btnNewCode").onclick = () => { if (!C || !C.doc.locks.length) { toast("Add a door first (Access tab)"); return; } openCodeModal(null); };
+      $("#btnSyncCodes").onclick = doCodesSync;
       $("#btnNewPolicy").onclick = () => openPolicyModal(null);
       $("#btnLedPolicy").onclick = () => {
         const led = new Map(), tgts = new Set();
