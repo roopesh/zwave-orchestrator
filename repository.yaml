@@ -1,0 +1,5 @@
+# Lets Home Assistant treat this repo as a custom add-on repository. In HA:
+# Settings → Add-ons → Add-on Store → ⋮ → Repositories → add this repo's URL.
+name: Z-Wave Associations
+url: https://github.com/OWNER/zwave-associations
+maintainer: Roopesh Sheth

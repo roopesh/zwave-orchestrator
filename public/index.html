@@ -176,8 +176,12 @@
       }
       const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
 
+      // Resolve API calls relative to wherever this page is served from, so the app works both
+      // standalone (served at "/") and behind Home Assistant ingress (served under a token path
+      // prefix like /api/hassio_ingress/<token>/, which HA strips before it reaches our server).
+      const API_BASE = new URL(".", location.href).href;
       async function api(path, method = "GET", body) {
-        const r = await fetch(path, { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+        const r = await fetch(API_BASE + path.replace(/^\//, ""), { method, headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
         return r.json();
       }
       function toast(msg) {

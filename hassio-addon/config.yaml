@@ -1,0 +1,27 @@
+# Home Assistant add-on manifest. Uses the prebuilt multi-arch image published to GHCR by
+# .github/workflows/docker-publish.yml (replace OWNER once your GitHub repo exists).
+name: Z-Wave Associations
+version: "0.1.0"
+slug: zwave_associations
+description: Manage Z-Wave associations, device parameters, and lock user codes for companion/3-way switches.
+url: https://github.com/OWNER/zwave-associations
+# The published manifest is multi-arch, so one image tag serves every board.
+image: "ghcr.io/OWNER/zwave-associations"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+# Serve the UI through Home Assistant's authenticated ingress proxy (sidebar panel + mobile app).
+ingress: true
+ingress_port: 8090
+panel_icon: mdi:lan-connect
+panel_title: Z-Wave Assoc
+# Persistent config (gangs.yaml / policies.yaml / devices.yaml / codes.yaml) lives in the add-on's
+# /data volume automatically — no host mapping needed.
+options:
+  zws_host: a0d7b954-zwave-js-ui
+  zws_port: 3000
+schema:
+  zws_host: str
+  zws_port: port

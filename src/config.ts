@@ -1,5 +1,5 @@
-// Connection resolution. Precedence: CLI flags > env > config/config.json > defaults.
-// Kept transport-agnostic so the future web server reuses the same resolver.
+// Connection resolution. Precedence: CLI flags > env > HA add-on options > config/config.json >
+// defaults. Kept transport-agnostic so the web server reuses the same resolver.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -44,13 +44,27 @@ function readConfigFile(): FileConfig {
   }
 }
 
+/** Home Assistant writes an add-on's user options to /data/options.json. When running as the HA
+ *  add-on, that's where the zwave-js-server host/port come from (keys defined in config.yaml). */
+function readAddonOptions(): FileConfig {
+  const path = "/data/options.json";
+  if (!existsSync(path)) return {};
+  try {
+    const o = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    return { host: o.zws_host as string, port: o.zws_port as number, url: o.zws_url as string };
+  } catch {
+    return {};
+  }
+}
+
 export function resolveConnection(argv: string[] = []): Connection {
   const flags = parseFlags(argv);
+  const addon = readAddonOptions();
   const file = readConfigFile();
 
-  const host = flags.host ?? process.env.ZWS_HOST ?? file.host ?? "127.0.0.1";
-  const port = Number(flags.port ?? process.env.ZWS_PORT ?? file.port ?? 3000);
-  const url = flags.url ?? process.env.ZWS_URL ?? file.url ?? `ws://${host}:${port}`;
+  const host = flags.host ?? process.env.ZWS_HOST ?? addon.host ?? file.host ?? "127.0.0.1";
+  const port = Number(flags.port ?? process.env.ZWS_PORT ?? addon.port ?? file.port ?? 3000);
+  const url = flags.url ?? process.env.ZWS_URL ?? addon.url ?? file.url ?? `ws://${host}:${port}`;
 
   return { host, port, url };
 }
