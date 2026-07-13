@@ -304,8 +304,11 @@
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
           if (m.returnValue !== "save") return;
-          const devices = [];
-          for (const n of nodes) { const d = disp.get(n.id); if (d === "adopted" || d === "ignored") devices.push({ id: n.id, fingerprint: fingerprintOf(n), disposition: d }); }
+          // Every node the modal showed gets a real disposition based on its final checkbox
+          // state — "new" is only ever a display default, never something Save should leave
+          // behind. Otherwise a device you never had to un/re-check (already correctly ticked)
+          // silently stays "new" forever and the inbox banner never clears.
+          const devices = nodes.map((n) => ({ id: n.id, fingerprint: fingerprintOf(n), disposition: disp.get(n.id) === "ignored" ? "ignored" : "adopted" }));
           await api("/api/devices", "POST", { devices });
           toast("Saved device settings");
           await loadState();

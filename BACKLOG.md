@@ -77,6 +77,30 @@ Tracked, not yet started. Ordered roughly by priority within each section.
 - Broader nav restructure — likely unnecessary now that search/grouping landed everywhere;
   revisit only if it's still a problem after everything else above.
 
+## Access (user codes) — generalize beyond Schlage
+
+Associations and Parameters are already fully device-dynamic (capability-derived groups;
+zwave-js's own device-metadata database for param labels/options — no per-brand code). Access
+(door codes) uses the standard User Code command class (CC 99) so the mechanism is generic too,
+but 4 things are currently Schlage-BE469-specific assumptions rather than device-reported facts:
+
+- **Managed slot range (3-30) is hardcoded.** Should read the lock's actual supported-user
+  count and reserved-slot count from the device (CC 99 exposes this) instead of assuming.
+- **PIN length range (4-8) is hardcoded.** The CC 99 metadata carries min/max code length
+  per device; use that instead of a fixed range, and make PIN-length management optional for
+  locks that don't expose a config param for it.
+- **Reserved/factory slots (0 = master, 1-2 = Schlage defaults) is a brand convention**, not
+  read from the device. Needs to become a per-lock setting (default 0 reserved, override per
+  brand/model) rather than a global constant.
+- **Assumes codes read back in the clear.** Verified true for the BE469, but many locks (some
+  Kwikset/Yale) mask PINs on read (return blank). The diff/verify logic compares PIN values,
+  which breaks on a masking lock — needs a fallback mode: verify by slot status + a stored
+  hash for drift detection, not a value comparison. This is a genuinely new capability, not
+  just removing a hardcoded constant.
+
+Worth doing before wider distribution; needs a second lock brand (ideally one that masks
+codes) to test against before calling it generalized.
+
 ## Home Assistant add-on (built 2026-07-12; validation + publish are the user's steps)
 
 - **DONE (code):** frontend is ingress-ready (all API calls resolved relative to the served
