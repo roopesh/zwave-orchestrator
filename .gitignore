@@ -3,8 +3,13 @@ dist/
 *.log
 # Local connection config (host/port/token) — keep out of the repo
 config/config.json
-# User codes contain plaintext PINs — MUST never be committed
+# Personal home config — auto-created at runtime, never belongs in the repo.
+# codes.yaml also holds plaintext PINs. Example/reference files (*.example.yaml) stay tracked.
+gangs.yaml
+policies.yaml
+devices.yaml
 codes.yaml
+mirrors.yaml
 # Editor / tooling local settings (machine-specific paths)
 .claude/settings.local.json
 .claude/launch.json
