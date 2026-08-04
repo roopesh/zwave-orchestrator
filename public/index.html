@@ -100,6 +100,7 @@
         <button class="tab active" data-tab="assoc">Associations</button>
         <button class="tab" data-tab="params">Parameters</button>
         <button class="tab" data-tab="access">Access</button>
+        <button class="tab" data-tab="mirror">Mirror</button>
       </div>
 
       <div id="tabAssoc" class="tabpane">
@@ -148,6 +149,15 @@
         </div>
         <div id="codesBody"></div>
       </div>
+
+      <div id="tabMirror" class="tabpane" hidden>
+        <div class="row between">
+          <h2 style="margin:0">Mirrored Switches</h2>
+          <button class="primary sm" id="btnNewMirror">+ New mirror</button>
+        </div>
+        <div class="sub" style="margin:4px 0 8px">Two or more loaded dimmers that track each other — on/off and brightness — via direct Z-Wave association. Pick one as the “primary” (the switch you expose to Home Assistant); hub changes to it relay to the rest, loop-free.</div>
+        <div id="mirrorBody"></div>
+      </div>
     </main>
 
     <dialog id="gangModal"></dialog>
@@ -155,6 +165,7 @@
     <dialog id="discoverModal"></dialog>
     <dialog id="deviceModal"></dialog>
     <dialog id="codeModal"></dialog>
+    <dialog id="mirrorModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -946,6 +957,99 @@
         m.showModal();
       }
 
+      // ---- Mirror (linked dimmers) ----
+      let M = null;
+      async function loadMirrorTab() { M = await api("/api/mirrors"); renderMirrors(); }
+
+      function renderMirrors() {
+        const el = $("#mirrorBody");
+        if (!M) { el.innerHTML = ""; return; }
+        if (!M.connected) { el.innerHTML = `<div class="card"><b>Not connected.</b> <span class="sub">Connect in Settings to manage mirrors.</span></div>`; return; }
+        const mirrors = M.doc.mirrors || [];
+        const swLabel = (id) => (M.switches.find((s) => s.id === id) || {}).label || ("#" + id);
+        if (!mirrors.length) { el.innerHTML = `<div class="card empty">No mirrors yet. Click <b>+ New mirror</b> to link two or more dimmers.</div>`; return; }
+        el.innerHTML = mirrors.map((m) => {
+          const pending = (M.plan.actions || []).filter((a) => a.gang === m.name).length + (M.plan.paramActions || []).filter((a) => a.policy === m.name).length;
+          const issues = (M.plan.issues || []).filter((i) => i.mirror === m.name);
+          const status = pending ? `<span class="chip warn">${pending} pending</span>` : `<span class="chip good">synced</span>`;
+          const caps = (m.capabilities || []).map((c) => `<span class="chip">${esc(capTitle(c))}</span>`).join(" ");
+          const members = m.members.map((id) => `${esc(swLabel(id))}${id === m.primary ? ' <span class="chip good">primary → HA</span>' : ""}`).join("<br>");
+          const issueNote = issues.length ? `<div class="issue warn">${issues.map((i) => esc(i.message)).join("<br>")}</div>` : "";
+          return `<div class="card"><div class="gang-head"><span class="name">${esc(m.name)}</span> ${status}<div class="spacer" style="flex:1"></div>
+            <button class="sm" data-medit="${esc(m.name)}">Edit</button>
+            <button class="sm primary" data-msync="${esc(m.name)}">Sync to switches</button></div>
+            <div class="row" style="gap:6px; margin:2px 0 6px"><span class="sub">Mirrors:</span> ${caps}</div>
+            <div class="sub">${members}</div>${issueNote}</div>`;
+        }).join("");
+        el.querySelectorAll("[data-medit]").forEach((b) => b.onclick = () => openMirrorModal((M.doc.mirrors || []).find((x) => x.name === b.dataset.medit)));
+        el.querySelectorAll("[data-msync]").forEach((b) => b.onclick = () => doMirrorSync(b.dataset.msync));
+      }
+
+      async function saveMirrorDoc(doc) {
+        const r = await api("/api/mirrors", "POST", { doc });
+        if (r.error) { console.error("[/api/mirrors]", r); toast(r.error); } else toast("Saved");
+        await loadMirrorTab();
+      }
+
+      async function doMirrorSync(name) {
+        toast("Syncing to switches…");
+        const r = await api("/api/mirrors/apply", "POST", { mirror: name });
+        console.log("[/api/mirrors/apply]", r);
+        const results = r.results || [];
+        const failed = results.filter((x) => !x.ok);
+        if (failed.length) console.error("[mirrors/apply] failed:", failed);
+        toast(results.length ? `${results.length - failed.length} change(s)${failed.length ? ", " + failed.length + " failed — see console" : ""}` : "Already in sync");
+        await loadMirrorTab();
+      }
+
+      async function deleteMirror(name, force) {
+        const r = await api("/api/mirrors/delete", "POST", { name, force: !!force });
+        if (r.error === "unwire failed" && !force) {
+          const detail = (r.failed || []).map((f) => `#${f.source} -> #${f.target}: ${f.error || "unknown"}`).join("\n");
+          if (confirm(`Couldn't unwire ${(r.failed || []).length} association(s):\n\n${detail}\n\nOK = remove from config anyway (links may remain on the switches).\nCancel = keep it, fix, retry.`)) return deleteMirror(name, true);
+          await loadMirrorTab(); return;
+        }
+        toast(r.ok ? "Deleted" : (r.error || "Delete failed"));
+        await loadMirrorTab();
+      }
+
+      function openMirrorModal(existing) {
+        const m = $("#mirrorModal");
+        const cur = existing ? { ...existing, members: existing.members.slice(), capabilities: existing.capabilities.slice() } : { name: "", members: [], primary: null, capabilities: ["onoff", "level", "dim"] };
+        const caps = ["onoff", "level", "dim"];
+        const swById = new Map((M.switches || []).map((s) => [s.id, s.label]));
+        const memberRows = (M.switches || []).map((s) => `<label style="display:block; margin:2px 0"><input type="checkbox" data-mem value="${s.id}" ${cur.members.includes(s.id) ? "checked" : ""} style="width:auto"/> ${esc(s.label)}</label>`).join("");
+        const primaryOpts = () => cur.members.map((id) => `<option value="${id}" ${id === cur.primary ? "selected" : ""}>${esc(swById.get(id) || ("#" + id))}</option>`).join("") || `<option value="">— pick switches first —</option>`;
+        m.innerHTML = `<form method="dialog"><div class="modal-h">${existing ? "Edit" : "New"} mirror</div><div class="modal-b">
+          <label class="sub">Name</label><input id="mName" value="${esc(cur.name)}" placeholder="e.g. Primary Closet Lights"/>
+          <div class="sub" style="margin-top:10px">Switches to mirror (pick 2+)</div><div id="mMembers" style="margin-top:4px; max-height:200px; overflow:auto">${memberRows}</div>
+          <label class="sub" style="margin-top:10px; display:block">Primary (the one you expose to Home Assistant)</label><select id="mPrimary">${primaryOpts()}</select>
+          <div class="sub" style="margin-top:10px">Mirror which behaviours</div><div style="margin-top:4px">${caps.map((c) => `<label style="display:inline-block; margin-right:12px"><input type="checkbox" data-cap value="${c}" ${cur.capabilities.includes(c) ? "checked" : ""} style="width:auto"/> ${esc(capTitle(c))}</label>`).join("")}</div>
+          </div><div class="modal-f">${existing ? '<button class="ghost danger" value="delete">Delete</button>' : ""}<div class="spacer" style="flex:1"></div><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save</button></div></form>`;
+        const refreshPrimary = () => {
+          cur.members = [...m.querySelectorAll("[data-mem]:checked")].map((x) => Number(x.value));
+          if (!cur.members.includes(cur.primary)) cur.primary = cur.members[0] ?? null;
+          m.querySelector("#mPrimary").innerHTML = primaryOpts();
+        };
+        m.querySelectorAll("[data-mem]").forEach((cb) => cb.onchange = refreshPrimary);
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue === "cancel" || !m.returnValue) return;
+          if (m.returnValue === "delete") { await deleteMirror(cur.name); return; }
+          const name = m.querySelector("#mName").value.trim();
+          const members = [...m.querySelectorAll("[data-mem]:checked")].map((x) => Number(x.value));
+          const primary = Number(m.querySelector("#mPrimary").value);
+          const capabilities = [...m.querySelectorAll("[data-cap]:checked")].map((x) => x.value);
+          if (!name || members.length < 2 || !capabilities.length) { toast("Need a name, 2+ switches, and a behaviour"); return; }
+          const mirror = { name, members, primary: members.includes(primary) ? primary : members[0], capabilities };
+          const doc = { mirrors: (M.doc.mirrors || []).slice() };
+          const idx = existing ? doc.mirrors.findIndex((x) => x.name === existing.name) : -1;
+          if (idx >= 0) doc.mirrors[idx] = mirror; else doc.mirrors.push(mirror);
+          await saveMirrorDoc(doc);
+        });
+        m.showModal();
+      }
+
       function openPolicyModal(existing, seedParams, seedTargets) {
         const nodes = (P.nodes || []).filter((n) => !n.isController);
         const targets = new Set(existing ? existing.targets : seedTargets || []);
@@ -1133,10 +1237,13 @@
         $("#tabAssoc").hidden = tab !== "assoc";
         $("#tabParams").hidden = tab !== "params";
         $("#tabAccess").hidden = tab !== "access";
+        $("#tabMirror").hidden = tab !== "mirror";
         if (tab === "params" && !P) loadParams();
         if (tab === "access") loadCodes();
+        if (tab === "mirror") loadMirrorTab();
       });
       $("#btnNewCode").onclick = () => { if (!C || !C.doc.locks.length) { toast("Add a door first (Access tab)"); return; } openCodeModal(null); };
+      $("#btnNewMirror").onclick = () => { if (!M || !(M.switches || []).length) { toast("No switches found"); return; } openMirrorModal(null); };
       $("#btnSyncCodes").onclick = doCodesSync;
       $("#btnNewPolicy").onclick = () => openPolicyModal(null);
       $("#btnLedPolicy").onclick = () => {

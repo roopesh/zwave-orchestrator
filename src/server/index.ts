@@ -19,6 +19,7 @@ import { discoverGangs } from "../topology/discover.ts";
 import { analyzeDevices, fingerprintOf, forgetDevice, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import { applyCodeActions, computeCodePlan, ensureSlots, findPinLengthParam, importCandidates, loadCodes, saveCodes, validateCodes, type CodeAction, type CodesDoc } from "../topology/codes.ts";
+import { computeMirrorPlan, computeMirrorTeardown, loadMirrors, saveMirrors, type MirrorDoc } from "../topology/mirrors.ts";
 import type { NodeDump } from "../types.ts";
 
 type UiNode = NodeDump & { supports: string[] };
@@ -28,6 +29,7 @@ const GANGS_FILE = process.env.GANGS_FILE ?? "gangs.yaml";
 const POLICIES_FILE = process.env.POLICIES_FILE ?? "policies.yaml";
 const DEVICES_FILE = process.env.DEVICES_FILE ?? "devices.yaml";
 const CODES_FILE = process.env.CODES_FILE ?? "codes.yaml";
+const MIRRORS_FILE = process.env.MIRRORS_FILE ?? "mirrors.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
 
 // Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
@@ -187,6 +189,10 @@ async function main(): Promise<void> {
       if (path === "/api/codes" && req.method === "POST") return void (await handleSaveCodes(hub, res, await readBody(req)));
       if (path === "/api/codes/apply" && req.method === "POST") return void (await handleCodesApply(hub, res));
       if (path === "/api/codes/delete" && req.method === "POST") return void (await handleCodesDelete(hub, res, await readBody(req)));
+      if (path === "/api/mirrors" && req.method === "GET") return void (await handleMirrors(hub, res));
+      if (path === "/api/mirrors" && req.method === "POST") return void (await handleSaveMirrors(hub, res, await readBody(req)));
+      if (path === "/api/mirrors/apply" && req.method === "POST") return void (await handleMirrorsApply(hub, res, await readBody(req)));
+      if (path === "/api/mirrors/delete" && req.method === "POST") return void (await handleMirrorsDelete(hub, res, await readBody(req)));
       if (path === "/api/remap" && req.method === "POST") return void (await handleRemap(hub, res, await readBody(req)));
       if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
@@ -460,6 +466,65 @@ async function handleCodesDelete(hub: Hub, res: ServerResponse, body: any): Prom
   }
   doc.codes = doc.codes.filter((c) => c.name !== name);
   saveCodes(CODES_FILE, doc);
+  json(res, 200, { ok: true, doc });
+}
+
+// Mirror groups: co-equal dimmers that track each other (bidirectional associations + forwarding
+// only on the primary). Read-only view returns the doc, the pending plan, issues, and a switch list.
+async function handleMirrors(hub: Hub, res: ServerResponse): Promise<void> {
+  const doc = loadMirrors(MIRRORS_FILE);
+  let adapter: ZWaveAdapter;
+  try { adapter = await hub.ensure(); } catch { return void json(res, 200, { doc, switches: [], plan: { actions: [], paramActions: [], issues: [], satisfied: 0 }, connected: false }); }
+  const nodes = await adapter.getNodes();
+  const switches = nodes.filter((n) => !n.isController && !n.isLongRange).map((n) => ({ id: n.id, label: `${n.location ? "[" + n.location + "] " : ""}${n.name || n.product || "#" + n.id}` }));
+  const plan = await computeMirrorPlan(adapter, doc);
+  json(res, 200, { doc, switches, plan, connected: true });
+}
+
+async function handleSaveMirrors(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const doc = body?.doc as MirrorDoc;
+  if (!doc || !Array.isArray(doc.mirrors)) return void json(res, 400, { error: "expected { doc: { mirrors: [...] } }" });
+  log(`SAVE-MIRRORS: ${doc.mirrors.map((m) => `${m.name}(${m.members.join("+")})`).join(", ") || "(none)"}`);
+  saveMirrors(MIRRORS_FILE, doc);
+  let plan: any = { actions: [], paramActions: [], issues: [], satisfied: 0 };
+  if (hub.connected && hub.adapter) plan = await computeMirrorPlan(hub.adapter, doc);
+  json(res, 200, { ok: true, doc, plan });
+}
+
+// Apply: wire the associations + set the param-59 bits, with the same read-back verification the
+// association/param executors already do. Logs each action.
+async function handleMirrorsApply(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const adapter = await hub.ensure();
+  const doc = loadMirrors(MIRRORS_FILE);
+  const plan = await computeMirrorPlan(adapter, doc);
+  const filtered = body?.mirror ? plan.actions.filter((a) => a.gang === body.mirror) : plan.actions;
+  const pFiltered = body?.mirror ? plan.paramActions.filter((a) => a.policy === body.mirror) : plan.paramActions;
+  log(`MIRRORS-APPLY ${body?.mirror ?? "*"}: ${filtered.length} association(s) + ${pFiltered.length} param(s)`);
+  const results = await applyActions(adapter, filtered);
+  logResults("mirror-assoc", results);
+  const paramResults = pFiltered.length ? await applyParamActions(adapter, pFiltered) : [];
+  logResults("mirror-param", paramResults);
+  const after = await computeMirrorPlan(adapter, doc);
+  json(res, 200, { results: [...results, ...paramResults], plan: after });
+}
+
+// Delete: tear down the mirror's inter-member associations, then drop it from the file. Refuses to
+// remove from config if an unwire fails (unless force) — same guard as gang/code delete.
+async function handleMirrorsDelete(hub: Hub, res: ServerResponse, body: any): Promise<void> {
+  const name = String(body?.name ?? "");
+  if (!name) return void json(res, 400, { error: "expected { name }" });
+  const adapter = await hub.ensure();
+  const doc = loadMirrors(MIRRORS_FILE);
+  const mir = doc.mirrors.find((m) => m.name === name);
+  if (!mir) return void json(res, 404, { error: "no such mirror" });
+  const actions = await computeMirrorTeardown(adapter, mir);
+  log(`MIRRORS-DELETE "${name}": removing ${actions.length} association(s)`);
+  const results = await applyActions(adapter, actions);
+  logResults("mirror-teardown", results);
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length && !body?.force) return void json(res, 409, { error: "unwire failed", failed: failed.map((r) => ({ source: r.action.source, target: r.action.target, error: r.error })) });
+  doc.mirrors = doc.mirrors.filter((m) => m.name !== name);
+  saveMirrors(MIRRORS_FILE, doc);
   json(res, 200, { ok: true, doc });
 }
 
