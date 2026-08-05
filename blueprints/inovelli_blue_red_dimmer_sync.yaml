@@ -1,0 +1,89 @@
+blueprint:
+  name: Inovelli Blue ↔ Red Dimmer Sync
+  author: roopesh
+  description: >
+    Keeps two dimmers in sync — on/off AND brightness — across protocols that
+    can't associate directly (Inovelli Blue / Zigbee ↔ Inovelli Red / Z-Wave).
+    Two-way: changing either one drives the other. Loop-safe: the mirrored
+    change is compared against a brightness tolerance, so it settles instead of
+    bouncing back and forth. Works on any two `light` entities, actually — not
+    just Inovelli.
+  domain: automation
+  input:
+    dimmer_one:
+      name: Dimmer 1
+      description: First light (e.g. the Inovelli Blue / Zigbee dimmer).
+      selector:
+        entity:
+          domain: light
+    dimmer_two:
+      name: Dimmer 2
+      description: Second light (e.g. the Inovelli Red / Z-Wave dimmer).
+      selector:
+        entity:
+          domain: light
+    brightness_tolerance:
+      name: Brightness tolerance
+      description: >
+        How far apart brightness (0–255) may be before syncing. A few points
+        absorbs the rounding between Zigbee (0–255) and Z-Wave (0–99) so the
+        two-way sync doesn't ping-pong. 3–5 is a good range.
+      default: 4
+      selector:
+        number:
+          min: 1
+          max: 20
+          step: 1
+          mode: slider
+
+# restart = the most recent change always wins; the tolerance guard below is
+# what actually prevents an infinite loop.
+mode: restart
+max_exceeded: silent
+
+trigger:
+  - platform: state
+    entity_id: !input dimmer_one
+  - platform: state
+    entity_id: !input dimmer_two
+
+variables:
+  one: !input dimmer_one
+  two: !input dimmer_two
+  tol: !input brightness_tolerance
+  source: "{{ trigger.entity_id }}"
+  target: "{{ two if trigger.entity_id == one else one }}"
+
+# Ignore unavailable/unknown churn (e.g. a device dropping off the mesh).
+condition:
+  - condition: template
+    value_template: >
+      {{ states(source) in ['on', 'off']
+         and states(target) not in ['unavailable', 'unknown'] }}
+
+action:
+  - choose:
+      # Source turned OFF -> turn the target off if it isn't already.
+      - conditions:
+          - "{{ states(source) == 'off' and states(target) != 'off' }}"
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: "{{ target }}"
+      # Source is ON -> match on-state + brightness, but only if it differs
+      # beyond the tolerance (or the target is off). This comparison is the
+      # loop breaker: the mirrored update lands within tolerance, so the
+      # echoed trigger finds nothing to do.
+      - conditions:
+          - "{{ states(source) == 'on' }}"
+        sequence:
+          - variables:
+              sb: "{{ state_attr(source, 'brightness') | int(0) }}"
+              tb: "{{ state_attr(target, 'brightness') | int(-999) }}"
+          - condition: template
+            value_template: "{{ states(target) == 'off' or (sb - tb) | abs > tol }}"
+          - service: light.turn_on
+            target:
+              entity_id: "{{ target }}"
+            # Send brightness only when we have a real value; otherwise just turn on.
+            data: "{{ {'brightness': sb} if sb > 0 else {} }}"
