@@ -789,7 +789,10 @@
           const settings = pol.settings.map((s) => { const def = paramDefAny(s.param, s.key, pol.targets); return `<span class="chip">${esc(def ? def.label : "p" + s.param + (s.key !== undefined ? "[" + s.key + "]" : ""))}: ${esc(valueLabel(def, s.value))}</span>`; }).join(" ");
           const roleWord = { all: "all switches", load: "load only", companions: "companions only" };
           const gangBits = (pol.gangTargets || []).map((gt) => `<span class="chip good">${esc(gt.gang)} (${roleWord[gt.role] || gt.role})</span>`).join(" ");
-          const targets = pol.targets.map((id) => `#${id} ${esc(pShort(id))}`).join(", ");
+          const devByRoom = {};
+          for (const id of pol.targets) { const n = pNode(id); (devByRoom[(n && n.location) || "—"] ??= []).push(id); }
+          const devList = Object.keys(devByRoom).sort().map((room) => `<b>${esc(room)}</b>: ${devByRoom[room].map((id) => "#" + id).join(", ")}`).join("<br>");
+          const targets = pol.targets.length ? `<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">Devices: ${pol.targets.length}</summary><div class="sub" style="margin-top:4px; line-height:1.5">${devList}</div></details>` : "";
           const drift = acts.length
             ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
             : `<div class="sub" style="margin-top:6px">✓ all target devices in sync</div>`;
@@ -800,7 +803,7 @@
               <button class="sm primary" data-psync="${esc(pol.name)}">Sync</button></div>
             <div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Settings:</span> ${settings}</div>
             ${gangBits ? `<div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Gangs:</span> ${gangBits}</div>` : ""}
-            ${targets ? `<div class="sub">Devices: ${targets}</div>` : ""}
+            ${targets}
             ${drift}${na}
           </div>`;
         }).join("");
@@ -1120,9 +1123,9 @@
             const opts = avail.map((p) => `<option value="${pkId(p)}" ${pkId(p) === pkId(s) ? "selected" : ""}>${esc(p.label)}</option>`).join("");
             return `<div class="setline"><select data-param="${i}">${extra}${opts}</select> = ${valueControl(i)} <button type="button" class="ghost" data-del="${i}">✕</button></div>`;
           }).join("") || `<div class="sub" style="margin-bottom:7px">No settings yet — add one.</div>`;
-          box.querySelectorAll("[data-param]").forEach((sel) => sel.addEventListener("change", () => { const i = Number(sel.dataset.param); const pk = pkParse(sel.value); settings[i].param = pk.param; settings[i].key = pk.key; const def = paramDefAny(pk.param, pk.key, effTargets()); settings[i].value = def?.default ?? def?.options?.[0]?.value ?? 0; paintSettings(); updateNote(); }));
-          box.querySelectorAll("[data-val]").forEach((inp) => inp.addEventListener("change", () => { settings[Number(inp.dataset.val)].value = Number(inp.value); updateNote(); }));
-          box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); }));
+          box.querySelectorAll("[data-param]").forEach((sel) => sel.addEventListener("change", () => { const i = Number(sel.dataset.param); const pk = pkParse(sel.value); settings[i].param = pk.param; settings[i].key = pk.key; const def = paramDefAny(pk.param, pk.key, effTargets()); settings[i].value = def?.default ?? def?.options?.[0]?.value ?? 0; paintSettings(); updateNote(); paintTargets(); }));
+          box.querySelectorAll("[data-val]").forEach((inp) => inp.addEventListener("change", () => { settings[Number(inp.dataset.val)].value = Number(inp.value); updateNote(); paintTargets(); }));
+          box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); paintTargets(); }));
         }
         function updateNote() {
           const onMesh = new Set((P.nodes || []).map((n) => n.id));
@@ -1155,18 +1158,43 @@
           box.querySelectorAll("[data-gngrole]").forEach((s) => s.addEventListener("change", () => { if (gangSel.has(s.dataset.gngrole)) { gangSel.set(s.dataset.gngrole, s.value); paintSettings(); updateNote(); } }));
         }
 
+        let tgtFilter = "all"; // all | applied | differs — relative to the policy's current settings
+        // Does this device already have the policy's settings? applied = every setting it supports
+        // matches; differs = it has them but ≥1 is off; na = it supports none of them.
+        const deviceState = (id) => {
+          if (!settings.length) return "none";
+          const params = P.params[id] || [];
+          let supported = 0, matched = 0;
+          for (const s of settings) { const def = params.find((p) => sameParam(p, s.param, s.key)); if (!def) continue; supported++; if (def.value === s.value) matched++; }
+          if (!supported) return "na";
+          return matched === supported ? "applied" : "differs";
+        };
         function paintTargets() {
           const q = m.querySelector("#pSearch")?.value || "";
-          const list = nodes.filter((n) => matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.model}`, q));
-          const byModel = {};
-          for (const n of list) (byModel[n.model || "Unknown"] ??= []).push(n);
           const box = m.querySelector("#pTargets");
-          box.innerHTML = Object.keys(byModel).sort().map((model) => {
-            const ns = byModel[model];
-            return `<div style="margin-top:6px"><div class="row" style="gap:8px"><span class="sub" style="font-weight:600">${esc(model)} (${ns.length})</span><button type="button" class="sm ghost" data-selall="${esc(model)}" style="padding:1px 8px">select all</button></div><div class="checks">${ns.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}</label>`).join("")}</div></div>`;
+          const count = { all: nodes.length, applied: 0, differs: 0 };
+          for (const n of nodes) { const st = deviceState(n.id); if (st === "applied") count.applied++; else if (st === "differs") count.differs++; }
+          const chip = (id, lbl, n) => `<span class="chip fchip ${tgtFilter === id ? "sel" : ""}" data-tfilter="${id}">${lbl} ${n}</span>`;
+          const pass = (id) => tgtFilter === "all" || deviceState(id) === tgtFilter;
+          const list = nodes.filter((n) => pass(n.id) && matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.model}`, q));
+          const byRoom = {};
+          for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
+          const open = (q.trim() || tgtFilter !== "all") ? " open" : ""; // auto-expand when searching/filtering
+          const badge = (id) => { const st = deviceState(id); return st === "applied" ? ' <span class="chip good" style="padding:0 5px">set</span>' : st === "differs" ? ' <span class="chip warn" style="padding:0 5px">differs</span>' : st === "na" ? ' <span class="sub">n/a</span>' : ""; };
+          const rooms = Object.keys(byRoom).sort().map((room) => {
+            const ns = byRoom[room];
+            return `<details${open} style="margin-top:4px"><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${ns.length})</summary><div style="margin:2px 0 2px 4px"><button type="button" class="sm ghost" data-roomsel="${esc(room)}" style="padding:0 7px">select all in ${esc(room)}</button></div><div class="checks">${ns.map((n) => `<label><input type="checkbox" data-tgt value="${n.id}" ${targets.has(n.id) ? "checked" : ""}/> #${n.id} ${esc(pLabel(n))}${badge(n.id)}</label>`).join("")}</div></details>`;
           }).join("") || `<div class="sub" style="margin-top:6px">No matching devices.</div>`;
+          const bar = settings.length ? `<div style="margin-bottom:6px">${chip("all", "All", count.all)} ${chip("applied", "Already set", count.applied)} ${chip("differs", "Not set", count.differs)}</div>` : "";
+          box.innerHTML = bar + rooms;
+          box.querySelectorAll("[data-tfilter]").forEach((c) => c.onclick = () => { tgtFilter = c.dataset.tfilter; paintTargets(); });
+          // Toggling targeting doesn't change a device's applied/differs state or the counts, so update
+          // the Set without repainting — that keeps whichever room sections are expanded expanded.
           box.querySelectorAll("[data-tgt]").forEach((c) => c.addEventListener("change", () => { c.checked ? targets.add(Number(c.value)) : targets.delete(Number(c.value)); paintSettings(); updateNote(); }));
-          box.querySelectorAll("[data-selall]").forEach((b) => b.addEventListener("click", () => { const model = b.dataset.selall; for (const n of nodes) if ((n.model || "Unknown") === model) targets.add(n.id); paintTargets(); paintSettings(); updateNote(); }));
+          box.querySelectorAll("[data-roomsel]").forEach((b) => b.addEventListener("click", () => {
+            for (const n of nodes) if ((n.location || "—") === b.dataset.roomsel) { targets.add(n.id); const cb = box.querySelector(`[data-tgt][value="${n.id}"]`); if (cb) cb.checked = true; }
+            paintSettings(); updateNote();
+          }));
         }
 
         paintGangs(); paintTargets(); paintSettings(); updateNote();
@@ -1181,7 +1209,7 @@
           paintSettings(); updateNote();
           toast(`Loaded ${settings.length} customized setting(s) from #${id}`);
         });
-        m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; if (!a) { toast("Pick devices first"); return; } settings.push({ param: a.param, key: a.key, value: a.default ?? a.options?.[0]?.value ?? 0 }); paintSettings(); updateNote(); });
+        m.querySelector("#pAdd").addEventListener("click", () => { const a = availableParams()[0]; if (!a) { toast("Pick devices first"); return; } settings.push({ param: a.param, key: a.key, value: a.default ?? a.options?.[0]?.value ?? 0 }); paintSettings(); updateNote(); paintTargets(); });
 
         m.addEventListener("close", async function onClose() {
           m.removeEventListener("close", onClose);
