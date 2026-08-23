@@ -134,9 +134,11 @@
         <input id="policySearch" placeholder='Search policies… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
         <div id="policies"></div>
 
-        <h2>Where devices differ</h2>
-        <input id="driftSearch" placeholder='Search parameters or models… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
-        <div class="card"><div id="paramBrowse"></div></div>
+        <details style="margin-top:14px">
+          <summary style="cursor:pointer; font-weight:700; font-size:1.05em; color:var(--ink); margin-bottom:8px">Where devices differ</summary>
+          <input id="driftSearch" placeholder='Search parameters or models… (try two words, or "an exact phrase")' style="margin-bottom:8px"/>
+          <div class="card"><div id="paramBrowse"></div></div>
+        </details>
       </div>
 
       <div id="tabAccess" class="tabpane" hidden>
