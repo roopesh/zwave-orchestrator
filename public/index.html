@@ -800,7 +800,8 @@
           const gangBits = (pol.gangTargets || []).map((gt) => `<span class="chip good">${esc(gt.gang)} (${roleWord[gt.role] || gt.role})</span>`).join(" ");
           const devByRoom = {};
           for (const id of pol.targets) { const n = pNode(id); (devByRoom[(n && n.location) || "—"] ??= []).push(id); }
-          const devList = Object.keys(devByRoom).sort().map((room) => `<b>${esc(room)}</b>: ${devByRoom[room].map((id) => "#" + id).join(", ")}`).join("<br>");
+          const devName = (id) => { const n = pNode(id); return esc((n && n.name) || (n && n.model) || ("#" + id)); };
+          const devList = Object.keys(devByRoom).sort().map((room) => `<b>${esc(room)}</b>: ${devByRoom[room].map(devName).join(", ")}`).join("<br>");
           const targets = pol.targets.length ? `<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">Devices: ${pol.targets.length}</summary><div class="sub" style="margin-top:4px; line-height:1.5">${devList}</div></details>` : "";
           const drift = acts.length
             ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
@@ -1145,7 +1146,7 @@
           if (gone.length) msgs.push(`${gone.map((id) => "#" + id).join(", ")} ${gone.length > 1 ? "are" : "is"} no longer on the mesh.<button type="button" class="sm" id="pRmGone" style="margin-left:8px; padding:1px 8px">Remove from policy</button>`);
           for (const s of settings) {
             const lack = effTargets().filter((id) => onMesh.has(id) && !(P.params[id] || []).some((p) => sameParam(p, s.param, s.key)));
-            if (lack.length) { const def = paramDefAny(s.param, s.key, effTargets()); msgs.push(`${lack.map((id) => "#" + id).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
+            if (lack.length) { const def = paramDefAny(s.param, s.key, effTargets()); msgs.push(`${lack.map((id) => esc(pShort(id))).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
           }
           const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
           const rm = m.querySelector("#pRmGone"); if (rm) rm.onclick = () => { for (const id of gone) targets.delete(id); paintTargets(); updateNote(); };
