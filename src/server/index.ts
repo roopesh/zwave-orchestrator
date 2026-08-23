@@ -206,6 +206,10 @@ async function main(): Promise<void> {
 
   server.listen(PORT, () => {
     process.stdout.write(`zwave-associations UI on http://localhost:${PORT}  (zwave-js-server: ${hub.conn.url}${hub.connected ? " ✓" : " — not connected"})\n`);
+    // Startup config diagnostic — which files it reads, and whether they exist where expected.
+    for (const [label, path] of [["gangs", GANGS_FILE], ["policies", POLICIES_FILE], ["devices", DEVICES_FILE], ["codes", CODES_FILE], ["mirrors", MIRRORS_FILE]] as const) {
+      process.stdout.write(`  config: ${label.padEnd(8)} <- ${path}  ${existsSync(path) ? "FOUND" : "MISSING"}\n`);
+    }
   });
 }
 
