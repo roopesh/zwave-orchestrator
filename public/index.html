@@ -426,6 +426,9 @@
               : g.forwardRemote
                 ? `<div class="sub" style="margin-top:6px">✓ Forwarding app/automation changes: enabled on load #${g.load} (companions stay off by design — that's what keeps it loop-free)</div>`
                 : "";
+          const pending = g.companions.filter((c) => compStatus(g, typeof c === "number" ? c : c.node).kind !== "good").length + staleForGang.length + paramFixes.length;
+          const nComp = g.companions.length;
+          const summaryStatus = pending ? `<span class="chip warn">${pending} pending</span>` : `<span class="chip good">wired</span>`;
           return `<div class="card">
             <div class="gang-head">
               <span class="name">${esc(g.name)}</span>
@@ -434,10 +437,10 @@
               <button class="sm" data-edit="${esc(g.name)}">Edit</button>
               <button class="sm primary" data-sync="${esc(g.name)}" title="Add missing links and remove any not in this setup">Sync</button>
             </div>
-            <div class="row" style="margin-bottom:8px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
-            ${comps}
-            ${staleNote}
-            ${paramNote}
+            <div class="row" style="margin-bottom:6px; gap:6px"><span class="sub">Companions can:</span> ${does}</div>
+            <details${pending ? " open" : ""}><summary class="sub" style="cursor:pointer">${nComp} companion${nComp === 1 ? "" : "s"} ${summaryStatus}</summary>
+              <div style="margin-top:6px">${comps}${staleNote}${paramNote}</div>
+            </details>
           </div>`;
         }).join("");
       }
@@ -561,11 +564,17 @@
             && matchesSearch(`#${n.id} ${n.location} ${n.name} ${n.product}`, q));
           const byRoom = {};
           for (const n of list) (byRoom[n.location || "—"] ??= []).push(n);
+          const open = q.trim() ? " open" : ""; // auto-expand while searching
           box.innerHTML = Object.keys(byRoom).sort().map((room) =>
-            `<div style="margin-top:6px"><div class="sub" style="font-weight:600">${esc(room)}</div><div class="checks">${byRoom[room].map(compRow).join("")}</div></div>`
+            `<details${open} style="margin-top:4px"><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${byRoom[room].length})</summary><div style="margin:2px 0 2px 4px"><button type="button" class="sm ghost" data-croom="${esc(room)}" style="padding:0 7px">select all in ${esc(room)}</button></div><div class="checks">${byRoom[room].map(compRow).join("")}</div></details>`
           ).join("") || `<div class="sub" style="margin-top:6px">No matching devices.</div>`;
           box.querySelectorAll("[data-comp]").forEach((c) => c.addEventListener("change", () => {
             c.checked ? checked.add(Number(c.value)) : checked.delete(Number(c.value));
+            recompute();
+          }));
+          // Update checkboxes in place (no repaint) so expanded sections stay open.
+          box.querySelectorAll("[data-croom]").forEach((b) => b.addEventListener("click", () => {
+            for (const n of list) if ((n.location || "—") === b.dataset.croom) { checked.add(n.id); const cb = box.querySelector(`[data-comp][value="${n.id}"]`); if (cb) cb.checked = true; }
             recompute();
           }));
         }
@@ -1021,7 +1030,9 @@
         const cur = existing ? { ...existing, members: existing.members.slice(), capabilities: existing.capabilities.slice() } : { name: "", members: [], primary: null, capabilities: ["onoff", "level", "dim"] };
         const caps = ["onoff", "level", "dim"];
         const swById = new Map((M.switches || []).map((s) => [s.id, s.label]));
-        const memberRows = (M.switches || []).map((s) => `<label style="display:block; margin:2px 0"><input type="checkbox" data-mem value="${s.id}" ${cur.members.includes(s.id) ? "checked" : ""} style="width:auto"/> ${esc(s.label)}</label>`).join("");
+        const memByRoom = {};
+        for (const s of (M.switches || [])) { const r = (s.label.match(/^\[([^\]]+)\]/) || [])[1] || "—"; (memByRoom[r] ??= []).push(s); }
+        const memberRows = Object.keys(memByRoom).sort().map((room) => `<details style="margin-top:4px"><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${memByRoom[room].length})</summary><div style="margin-top:2px">${memByRoom[room].map((s) => `<label style="display:block; margin:2px 0"><input type="checkbox" data-mem value="${s.id}" ${cur.members.includes(s.id) ? "checked" : ""} style="width:auto"/> ${esc(s.label)}</label>`).join("")}</div></details>`).join("");
         const primaryOpts = () => cur.members.map((id) => `<option value="${id}" ${id === cur.primary ? "selected" : ""}>${esc(swById.get(id) || ("#" + id))}</option>`).join("") || `<option value="">— pick switches first —</option>`;
         m.innerHTML = `<form method="dialog"><div class="modal-h">${existing ? "Edit" : "New"} mirror</div><div class="modal-b">
           <label class="sub">Name</label><input id="mName" value="${esc(cur.name)}" placeholder="e.g. Primary Closet Lights"/>
