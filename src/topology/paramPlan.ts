@@ -30,10 +30,24 @@ export interface ParamIssue {
   message: string;
 }
 
+/** A (node, param, key) that ≥2 policies set to DIFFERENT values. The highest-priority policy
+ *  (lowest list index) wins; the rest are recorded here so the overlap is never silent. */
+export interface ParamOverride {
+  node: number;
+  param: number;
+  key?: number;
+  label: string;
+  winner: string; // policy name that wins
+  winnerValue: number;
+  winnerValueLabel: string;
+  losers: { policy: string; value: number; valueLabel: string }[];
+}
+
 export interface ParamPlan {
   actions: ParamAction[];
   issues: ParamIssue[];
   satisfied: number;
+  overrides: ParamOverride[];
 }
 
 const optLabel = (p: ConfigParam | undefined, v: number | null): string => {
@@ -76,29 +90,50 @@ export async function computeParamPlan(
   const params = paramsByNode ?? (await adapter.getConfigParams());
   const actions: ParamAction[] = [];
   const issues: ParamIssue[] = [];
+  const overrides: ParamOverride[] = [];
   let satisfied = 0;
 
-  for (const pol of doc.policies) {
+  // Collect every (node, param, key) each policy wants to set, in priority order (list index 0 =
+  // highest priority). When policies overlap on the same setting, the highest-priority one wins —
+  // so the outcome is deterministic instead of "whichever policy happened to sync last".
+  type Claim = { node: number; param: number; key?: number; entries: { policy: string; pri: number; value: number }[] };
+  const claims = new Map<string, Claim>();
+  doc.policies.forEach((pol, pri) => {
     for (const node of resolveTargets(pol, topo, issues)) {
-      const list = params[node] ?? [];
       for (const s of pol.settings) {
-        const def = list.find((p) => sameSetting(p, s.param, s.key));
-        if (!def) {
-          issues.push({ severity: "warning", policy: pol.name, node, param: s.param, key: s.key, code: "NO_PARAM", message: `#${node} has no setting ${settingName(s.param, s.key)} — not applicable to this device.` });
-          continue;
-        }
-        if (!def.writeable) {
-          issues.push({ severity: "warning", policy: pol.name, node, param: s.param, key: s.key, code: "READ_ONLY", message: `"${def.label}" on #${node} is read-only.` });
-          continue;
-        }
-        const already = def.value === s.value;
-        if (already) satisfied++;
-        if (already && !force) continue;
-        actions.push({ policy: pol.name, node, param: s.param, key: s.key, label: def.label, current: def.value, currentLabel: optLabel(def, def.value), desired: s.value, desiredLabel: optLabel(def, s.value) });
+        const k = `${node}|${s.param}|${s.key ?? ""}`;
+        let c = claims.get(k);
+        if (!c) claims.set(k, (c = { node, param: s.param, key: s.key, entries: [] }));
+        c.entries.push({ policy: pol.name, pri, value: s.value });
       }
     }
+  });
+
+  for (const c of claims.values()) {
+    const def = (params[c.node] ?? []).find((p) => sameSetting(p, c.param, c.key));
+    if (!def) {
+      for (const e of c.entries) issues.push({ severity: "warning", policy: e.policy, node: c.node, param: c.param, key: c.key, code: "NO_PARAM", message: `#${c.node} has no setting ${settingName(c.param, c.key)} — not applicable to this device.` });
+      continue;
+    }
+    if (!def.writeable) {
+      for (const e of c.entries) issues.push({ severity: "warning", policy: e.policy, node: c.node, param: c.param, key: c.key, code: "READ_ONLY", message: `"${def.label}" on #${c.node} is read-only.` });
+      continue;
+    }
+    const winner = c.entries.reduce((a, b) => (b.pri < a.pri ? b : a)); // lowest index wins; first listed breaks ties
+    const losers = c.entries.filter((e) => e !== winner && e.value !== winner.value);
+    if (losers.length) {
+      overrides.push({
+        node: c.node, param: c.param, key: c.key, label: def.label,
+        winner: winner.policy, winnerValue: winner.value, winnerValueLabel: optLabel(def, winner.value),
+        losers: losers.map((l) => ({ policy: l.policy, value: l.value, valueLabel: optLabel(def, l.value) })),
+      });
+    }
+    const already = def.value === winner.value;
+    if (already) satisfied++;
+    if (already && !force) continue;
+    actions.push({ policy: winner.policy, node: c.node, param: c.param, key: c.key, label: def.label, current: def.value, currentLabel: optLabel(def, def.value), desired: winner.value, desiredLabel: optLabel(def, winner.value) });
   }
-  return { actions, issues, satisfied };
+  return { actions, issues, satisfied, overrides };
 }
 
 export interface ParamResult {

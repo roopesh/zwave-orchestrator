@@ -802,9 +802,15 @@
           const targetLabels = pol.targets.map((id) => `#${id} ${pShort(id)}`).join(" ");
           return `${pol.name} ${settingLabels} ${gangNames} ${targetLabels}`;
         };
+        const searching = !!q.trim();
         const pols = all.filter((pol) => matchesSearch(haystackOf(pol), q));
         if (!pols.length) { el.innerHTML = `<div class="card empty">No policies match your search.</div>`; return; }
-        el.innerHTML = pols.map((pol) => {
+        const ovAll = P.plan.overrides || [];
+        const lead = (!searching && all.length > 1)
+          ? `<div class="sub" style="margin:0 0 10px; line-height:1.5">Policies are <b>priority-ranked</b> — when two set the same parameter on a device, the <b>higher</b> one wins. Use ▲▼ to reorder.${ovAll.length ? ` <b>${ovAll.length}</b> setting(s) currently overlap.` : ""}</div>`
+          : "";
+        el.innerHTML = lead + pols.map((pol) => {
+          const rank = all.indexOf(pol);
           const acts = (P.plan.actions || []).filter((a) => a.policy === pol.name);
           const issues = (P.plan.issues || []).filter((i) => i.policy === pol.name);
           const settings = pol.settings.map((s) => { const def = paramDefAny(s.param, s.key, pol.targets); return `<span class="chip">${esc(def ? def.label : "p" + s.param + (s.key !== undefined ? "[" + s.key + "]" : ""))}: ${esc(valueLabel(def, s.value))}</span>`; }).join(" ");
@@ -816,17 +822,24 @@
           const devList = Object.keys(devByRoom).sort().map((room) => `<b>${esc(room)}</b>: ${devByRoom[room].map(devName).join(", ")}`).join("<br>");
           const targets = pol.targets.length ? `<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">Devices: ${pol.targets.length}</summary><div class="sub" style="margin-top:4px; line-height:1.5">${devList}</div></details>` : "";
           const drift = acts.length
-            ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
+            ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
             : `<div class="sub" style="margin-top:6px">✓ all target devices in sync</div>`;
           const na = issues.length ? `<div class="sub" style="margin-top:6px">${issues.map(humanParamIssue).join("<br>")}</div>` : "";
+          // Precedence: what this policy loses to a higher one (won't apply), and what it wins over lower ones.
+          const lostHere = ovAll.filter((o) => o.losers.some((l) => l.policy === pol.name));
+          const wonHere = ovAll.filter((o) => o.winner === pol.name);
+          const lostBlock = lostHere.length ? `<div class="issue warn" style="margin-top:6px">⤴ <b>${lostHere.length}</b> setting(s) here are overridden by a higher-priority policy and won't apply:<div class="fix">${lostHere.map((o) => { const mine = o.losers.find((l) => l.policy === pol.name); return `${esc(o.label)} on ${esc(pShort(o.node))} — this wants <b>${esc(mine.valueLabel)}</b>, “${esc(o.winner)}” wins with <b>${esc(o.winnerValueLabel)}</b>`; }).join("<br>")}</div></div>` : "";
+          const wonBlock = wonHere.length ? `<div class="sub" style="margin-top:6px">↗ overrides <b>${wonHere.length}</b> lower-priority setting(s) on shared devices</div>` : "";
+          const move = searching ? "" : `<span class="sub" title="Priority ${rank + 1} of ${all.length} — higher wins conflicts" style="margin-right:4px">#${rank + 1}</span><button class="sm" data-pmove="${esc(pol.name)}" data-dir="up"${rank === 0 ? " disabled" : ""}>▲</button><button class="sm" data-pmove="${esc(pol.name)}" data-dir="down"${rank === all.length - 1 ? " disabled" : ""}>▼</button>`;
           return `<div class="card">
             <div class="gang-head"><span class="name">${esc(pol.name)}</span><div class="spacer" style="flex:1"></div>
+              ${move}
               <button class="sm" data-pedit="${esc(pol.name)}">Edit</button>
               <button class="sm primary" data-psync="${esc(pol.name)}">Sync</button></div>
             <div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Settings:</span> ${settings}</div>
             ${gangBits ? `<div class="row" style="gap:6px; margin-bottom:6px"><span class="sub">Gangs:</span> ${gangBits}</div>` : ""}
             ${targets}
-            ${drift}${na}
+            ${drift}${na}${lostBlock}${wonBlock}
           </div>`;
         }).join("");
       }
@@ -1151,16 +1164,45 @@
           box.querySelectorAll("[data-val]").forEach((inp) => inp.addEventListener("change", () => { settings[Number(inp.dataset.val)].value = Number(inp.value); updateNote(); paintTargets(); }));
           box.querySelectorAll("[data-del]").forEach((btn) => btn.addEventListener("click", () => { settings.splice(Number(btn.dataset.del), 1); paintSettings(); updateNote(); paintTargets(); }));
         }
+        // Resolve any policy's live node targets (explicit + gang members by role) — mirrors the server.
+        const resolvePolTargets = (pol) => {
+          const out = new Set(pol.targets || []);
+          for (const gt of pol.gangTargets || []) {
+            const g = (P.gangs || []).find((x) => x.name === gt.gang);
+            if (!g) continue;
+            if (gt.role !== "companions") out.add(g.load);
+            if (gt.role !== "load") for (const id of g.companions) out.add(id);
+          }
+          return out;
+        };
+        // Where this policy sits in the priority stack (a new policy is appended = lowest priority).
+        const myRank = existing ? (P.policies || []).findIndex((p) => p.name === existing.name) : (P.policies || []).length;
         function updateNote() {
           const onMesh = new Set((P.nodes || []).map((n) => n.id));
           const gone = [...targets].filter((id) => !onMesh.has(id));
           const msgs = [];
-          if (gone.length) msgs.push(`${gone.map((id) => "#" + id).join(", ")} ${gone.length > 1 ? "are" : "is"} no longer on the mesh.<button type="button" class="sm" id="pRmGone" style="margin-left:8px; padding:1px 8px">Remove from policy</button>`);
+          if (gone.length) msgs.push(`⚠ ${gone.map((id) => "#" + id).join(", ")} ${gone.length > 1 ? "are" : "is"} no longer on the mesh.<button type="button" class="sm" id="pRmGone" style="margin-left:8px; padding:1px 8px">Remove from policy</button>`);
           for (const s of settings) {
             const lack = effTargets().filter((id) => onMesh.has(id) && !(P.params[id] || []).some((p) => sameParam(p, s.param, s.key)));
-            if (lack.length) { const def = paramDefAny(s.param, s.key, effTargets()); msgs.push(`${lack.map((id) => esc(pShort(id))).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
+            if (lack.length) { const def = paramDefAny(s.param, s.key, effTargets()); msgs.push(`⚠ ${lack.map((id) => esc(pShort(id))).join(", ")} lack "${def ? def.label : "p" + s.param}" — skipped there.`); }
           }
-          const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.map((x) => "⚠ " + x).join("<br>");
+          // Live precedence: does another policy set the same parameter, differently, on a shared device?
+          const myTargets = new Set(effTargets());
+          for (const s of settings) {
+            for (let idx = 0; idx < (P.policies || []).length; idx++) {
+              const p = P.policies[idx];
+              if (existing && p.name === existing.name) continue;
+              const os = (p.settings || []).find((x) => x.param === s.param && (x.key ?? undefined) === (s.key ?? undefined));
+              if (!os || os.value === s.value) continue;
+              const shared = [...resolvePolTargets(p)].filter((id) => myTargets.has(id));
+              if (!shared.length) continue;
+              const def = paramDefAny(s.param, s.key, effTargets());
+              const lbl = esc(def ? def.label : "p" + s.param), n = shared.length, dev = n > 1 ? `${n} shared devices` : `1 shared device`;
+              if (myRank < idx) msgs.push(`↗ You override “${esc(p.name)}” on ${dev} for "${lbl}" — you set <b>${esc(valueLabel(def, s.value))}</b>, it sets <b>${esc(valueLabel(def, os.value))}</b>.`);
+              else msgs.push(`⤴ “${esc(p.name)}” (higher priority) overrides "${lbl}" on ${dev} — your <b>${esc(valueLabel(def, s.value))}</b> won't apply there; it sets <b>${esc(valueLabel(def, os.value))}</b>. Reorder in the policy list to change who wins.`);
+            }
+          }
+          const note = m.querySelector("#pNote"); note.style.display = msgs.length ? "block" : "none"; note.innerHTML = msgs.join("<br>");
           const rm = m.querySelector("#pRmGone"); if (rm) rm.onclick = () => { for (const id of gone) targets.delete(id); paintTargets(); updateNote(); };
         }
 
@@ -1311,6 +1353,14 @@
         const t = e.target.closest("button"); if (!t) return;
         if (t.dataset.psync) doParamSync({ policy: t.dataset.psync });
         else if (t.dataset.pedit) openPolicyModal((P.policies || []).find((p) => p.name === t.dataset.pedit));
+        else if (t.dataset.pmove) {
+          const list = [...(P.policies || [])];
+          const i = list.findIndex((p) => p.name === t.dataset.pmove);
+          const j = t.dataset.dir === "up" ? i - 1 : i + 1;
+          if (i < 0 || j < 0 || j >= list.length) return;
+          [list[i], list[j]] = [list[j], list[i]];
+          savePolicies(list);
+        }
       });
 
       loadState();

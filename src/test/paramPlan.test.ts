@@ -57,6 +57,50 @@ const topo: Topology = {
   gangs: [{ name: "Hall", load: 26, companions: [{ node: 20 }, { node: 21 }] }],
 };
 
+test("precedence: higher policy (index 0) wins a conflicting setting; loser recorded as override", async () => {
+  const a = new MockAdapter([{ id: 2, params: p59(0, 0) }]); // key 2 currently Disable
+  const doc = {
+    policies: [
+      { name: "High", targets: [2], settings: [{ param: 59, key: 2, value: 1 }] }, // wants Enable
+      { name: "Low", targets: [2], settings: [{ param: 59, key: 2, value: 0 }] }, //  wants Disable
+    ],
+  };
+  const plan = await computeParamPlan(a, doc);
+  assert.equal(plan.actions.length, 1); // one deterministic action, not two
+  assert.equal(plan.actions[0].policy, "High");
+  assert.equal(plan.actions[0].desired, 1);
+  assert.equal(plan.overrides.length, 1);
+  assert.equal(plan.overrides[0].winner, "High");
+  assert.equal(plan.overrides[0].winnerValue, 1);
+  assert.deepEqual(plan.overrides[0].losers.map((l) => l.policy), ["Low"]);
+  assert.equal(plan.overrides[0].label, "Forward Z-Wave Commands to Associated Devices");
+});
+
+test("precedence follows list order: swapping the policies flips the winner", async () => {
+  const High = { name: "High", targets: [2], settings: [{ param: 59, key: 2, value: 1 }] };
+  const Low = { name: "Low", targets: [2], settings: [{ param: 59, key: 2, value: 0 }] };
+  const p1 = await computeParamPlan(new MockAdapter([{ id: 2, params: p59(0, 0) }]), { policies: [High, Low] });
+  assert.equal(p1.overrides[0].winner, "High");
+  assert.deepEqual(p1.overrides[0].losers.map((l) => l.policy), ["Low"]);
+  const p2 = await computeParamPlan(new MockAdapter([{ id: 2, params: p59(0, 0) }]), { policies: [Low, High] });
+  assert.equal(p2.overrides[0].winner, "Low");
+  assert.deepEqual(p2.overrides[0].losers.map((l) => l.policy), ["High"]);
+});
+
+test("two policies asserting the same value are not a conflict: no override, deduped to one action", async () => {
+  const a = new MockAdapter([{ id: 2, params: p59(0, 0) }]);
+  const doc = {
+    policies: [
+      { name: "A", targets: [2], settings: [{ param: 59, key: 2, value: 1 }] },
+      { name: "B", targets: [2], settings: [{ param: 59, key: 2, value: 1 }] },
+    ],
+  };
+  const plan = await computeParamPlan(a, doc);
+  assert.equal(plan.overrides.length, 0);
+  assert.equal(plan.actions.length, 1); // deduped, not 2
+  assert.equal(plan.satisfied, 0); // device is Disable, both want Enable
+});
+
 test("resolveTargets expands gang targets by role and dedupes with explicit ids", () => {
   const pol = (role: "all" | "load" | "companions") => ({ name: "P", targets: [20], gangTargets: [{ gang: "Hall", role }], settings: [] });
   assert.deepEqual(resolveTargets(pol("all"), topo), [20, 21, 26]);

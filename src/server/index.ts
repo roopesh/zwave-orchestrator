@@ -220,7 +220,7 @@ async function handleState(hub: Hub, res: ServerResponse): Promise<void> {
   try {
     adapter = await hub.ensure();
   } catch {
-    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0 }, stale: [], deviceChanges: { removed: [], repairCandidates: [] } });
+    json(res, 200, { ...base, connection: { ...base.connection, connected: false, error: hub.lastError }, nodes: [], plan: { actions: [], issues: [], satisfied: 0, overrides: [] }, stale: [], deviceChanges: { removed: [], repairCandidates: [] } });
     return;
   }
   const [nodes, plan, stale] = [await buildNodes(adapter), await computePlan(adapter, topology), await computeStale(adapter, topology)];
@@ -347,7 +347,7 @@ async function handleSavePolicies(hub: Hub, res: ServerResponse, body: any): Pro
   if (!doc) return void json(res, 400, { error: "expected { policies: [...] }" });
   log(`SAVE-POLICIES: ${doc.policies.map((p) => p.name).join(", ") || "(none)"}`);
   savePolicies(POLICIES_FILE, doc);
-  let plan: any = { actions: [], issues: [], satisfied: 0 };
+  let plan: any = { actions: [], issues: [], satisfied: 0, overrides: [] };
   if (hub.connected && hub.adapter) plan = await computeParamPlan(hub.adapter, doc, loadTopology(GANGS_FILE));
   json(res, 200, { ok: true, policies: doc.policies, plan });
 }
@@ -549,7 +549,7 @@ async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promis
   if (removed.length) log(`SAVE-GANGS removed: ${removed.join(", ")} (config only — device associations are untouched; Teardown or Sync to actually unwire)`);
   if (added.length) log(`SAVE-GANGS added: ${added.join(", ")}`);
   saveTopology(GANGS_FILE, topology);
-  let plan = { actions: [], issues: [], satisfied: 0 } as any;
+  let plan = { actions: [], issues: [], satisfied: 0, overrides: [] } as any;
   if (hub.connected && hub.adapter) plan = await computePlan(hub.adapter, topology);
   json(res, 200, { ok: true, topology, plan });
 }
