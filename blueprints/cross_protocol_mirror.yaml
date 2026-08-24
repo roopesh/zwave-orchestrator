@@ -1,0 +1,93 @@
+blueprint:
+  name: Cross-Protocol Light Mirror (N lights)
+  author: zwave-associations
+  description: >
+    Keeps two OR MORE lights in sync — on/off AND brightness — across protocols
+    that can't associate directly (e.g. Zigbee ↔ Z-Wave, Inovelli Blue ↔ Red).
+    Change any one and the rest follow. Loop-safe: each mirrored change is
+    compared against a brightness tolerance, so it settles instead of bouncing.
+    Works on any `light` entities.
+
+    Managed by the Z-Wave Associations tool — add/remove members from its Mirror
+    tab. You can still open and read this automation in Home Assistant; edits to
+    the member list here will show as "drift" in the tool until you re-sync.
+  domain: automation
+  input:
+    lights:
+      name: Lights to keep in sync
+      description: Two or more light entities. Any change to one is mirrored to the others.
+      selector:
+        entity:
+          domain: light
+          multiple: true
+    brightness_tolerance:
+      name: Brightness tolerance
+      description: >
+        How far apart brightness (0–255) may be before syncing. A few points
+        absorbs the rounding between protocols (Zigbee 0–255 vs Z-Wave 0–99) so
+        the sync doesn't ping-pong. 3–5 is a good range.
+      default: 4
+      selector:
+        number:
+          min: 1
+          max: 32
+          step: 1
+          mode: slider
+
+# queued = let each change's fan-out to the other lights finish before the next
+# one runs; the tolerance guard below is what actually prevents an infinite loop.
+mode: queued
+max: 10
+max_exceeded: silent
+
+variables:
+  lights: !input lights
+  tol: !input brightness_tolerance
+  source: "{{ trigger.entity_id }}"
+
+trigger:
+  - platform: state
+    entity_id: !input lights
+
+# Ignore unavailable/unknown churn (e.g. a device dropping off the mesh) and the
+# initial "None -> state" restore on restart.
+condition:
+  - condition: template
+    value_template: >
+      {{ trigger.to_state is not none
+         and states(source) in ['on', 'off'] }}
+
+action:
+  - repeat:
+      for_each: "{{ lights | reject('eq', source) | list }}"
+      sequence:
+        - variables:
+            target: "{{ repeat.item }}"
+            ss: "{{ states(source) }}"
+            ts: "{{ states(target) }}"
+            sb: "{{ state_attr(source, 'brightness') | int(0) }}"
+            tb: "{{ state_attr(target, 'brightness') | int(-999) }}"
+        - choose:
+            # Skip targets that are offline — don't fight an unavailable device.
+            - conditions:
+                - "{{ ts in ['unavailable', 'unknown'] }}"
+              sequence: []
+            # Source OFF -> turn the target off if it isn't already.
+            - conditions:
+                - "{{ ss == 'off' and ts != 'off' }}"
+              sequence:
+                - service: light.turn_off
+                  target:
+                    entity_id: "{{ target }}"
+            # Source ON -> match brightness, but only if it differs beyond the
+            # tolerance (or the target is off). This comparison is the loop
+            # breaker: the mirrored update lands within tolerance, so the echoed
+            # trigger finds nothing to do.
+            - conditions:
+                - "{{ ss == 'on' and (ts == 'off' or (sb - tb) | abs > tol) }}"
+              sequence:
+                - service: light.turn_on
+                  target:
+                    entity_id: "{{ target }}"
+                  # Send brightness only when we have a real value; else just turn on.
+                  data: "{{ {'brightness': sb} if sb > 0 else {} }}"

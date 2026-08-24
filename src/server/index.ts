@@ -5,7 +5,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { resolveConnection, type Connection } from "../config.ts";
 import { ZwaveClient } from "../zwave/client.ts";
@@ -19,7 +19,9 @@ import { discoverGangs } from "../topology/discover.ts";
 import { analyzeDevices, fingerprintOf, forgetDevice, loadDevices, remapNodeId, saveDevices } from "../topology/devices.ts";
 import { applyParamActions, computeParamPlan, type ParamAction } from "../topology/paramPlan.ts";
 import { applyCodeActions, computeCodePlan, ensureSlots, findPinLengthParam, importCandidates, loadCodes, saveCodes, validateCodes, type CodeAction, type CodesDoc } from "../topology/codes.ts";
-import { computeMirrorPlan, computeMirrorTeardown, loadMirrors, saveMirrors, type MirrorDoc } from "../topology/mirrors.ts";
+import { computeMirrorPlan, computeMirrorTeardown, loadMirrors, saveMirrors, type MirrorDoc, type HubMirror } from "../topology/mirrors.ts";
+import { hubAutomationConfig, hubAutomationId, hubDrift, isHubAutomationId, BLUEPRINT_FILE } from "../topology/hubMirror.ts";
+import { deployBlueprint, getAutomationConfig, haConfigured, haPing, listLights, listZwaAutomationIds, reloadAutomations, saveAutomationConfig, deleteAutomationConfig, setHaConfig } from "./ha.ts";
 import type { NodeDump } from "../types.ts";
 
 type UiNode = NodeDump & { supports: string[] };
@@ -31,6 +33,38 @@ const DEVICES_FILE = process.env.DEVICES_FILE ?? "devices.yaml";
 const CODES_FILE = process.env.CODES_FILE ?? "codes.yaml";
 const MIRRORS_FILE = process.env.MIRRORS_FILE ?? "mirrors.yaml";
 const CONFIG_FILE = join(process.cwd(), "config", "config.json");
+// Where HA's main config lives (for dropping the mirror blueprint). In the add-on this is the
+// homeassistant_config map mount; on a dev box, point it at your HA config over Samba if you want
+// blueprint deploys locally, else it's simply skipped.
+const HA_CONFIG_DIR = process.env.HA_CONFIG_DIR ?? "/homeassistant";
+
+interface AppConfig { host?: string; port?: number; haUrl?: string; haToken?: string; }
+function readAppConfig(): AppConfig {
+  if (!existsSync(CONFIG_FILE)) return {};
+  try { return JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as AppConfig; } catch { return {}; }
+}
+function writeAppConfig(patch: AppConfig): AppConfig {
+  const merged = { ...readAppConfig(), ...patch };
+  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
+  writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2) + "\n");
+  return merged;
+}
+
+function resolveBlueprintFile(): string {
+  const here = import.meta.dirname;
+  const cands = [process.env.BLUEPRINT_FILE_PATH, join(here, "..", "blueprints", BLUEPRINT_FILE), join(here, "..", "..", "blueprints", BLUEPRINT_FILE), join(process.cwd(), "blueprints", BLUEPRINT_FILE)].filter(Boolean) as string[];
+  return cands.find((p) => existsSync(p)) ?? join(process.cwd(), "blueprints", BLUEPRINT_FILE);
+}
+const BLUEPRINT_SRC = resolveBlueprintFile();
+
+/** Best-effort: drop the current mirror blueprint into HA's config so instances can use it. Safe to
+ *  call repeatedly; skips quietly when HA's config dir isn't mounted (e.g. a plain dev box). */
+function deployBlueprintIfPossible(): { deployed: boolean; detail: string } {
+  if (!existsSync(HA_CONFIG_DIR)) return { deployed: false, detail: `HA config dir ${HA_CONFIG_DIR} not present — skipped` };
+  if (!existsSync(BLUEPRINT_SRC)) return { deployed: false, detail: `blueprint source ${BLUEPRINT_SRC} missing — skipped` };
+  try { const dest = deployBlueprint(BLUEPRINT_SRC, HA_CONFIG_DIR); return { deployed: true, detail: dest }; }
+  catch (e: any) { return { deployed: false, detail: e?.message ?? String(e) }; }
+}
 
 // Resolve public/ relative to this script so it works in dev (src/server), a bundled dist/,
 // and an installed package (npx), falling back to cwd.
@@ -169,6 +203,13 @@ async function main(): Promise<void> {
   // Try an initial connection; if it fails the UI still loads and can fix settings.
   await hub.connect().catch(() => {});
 
+  // Home Assistant (cross-protocol mirrors): pick up a standalone URL/token from config.json (the
+  // add-on uses the Supervisor token instead), then drop the mirror blueprint into HA's config.
+  const appCfg = readAppConfig();
+  setHaConfig(appCfg.haUrl, appCfg.haToken);
+  const bp = deployBlueprintIfPossible();
+  process.stdout.write(`  blueprint: ${bp.deployed ? "deployed -> " + bp.detail : bp.detail}\n`);
+
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
@@ -194,8 +235,13 @@ async function main(): Promise<void> {
       if (path === "/api/mirrors/apply" && req.method === "POST") return void (await handleMirrorsApply(hub, res, await readBody(req)));
       if (path === "/api/mirrors/delete" && req.method === "POST") return void (await handleMirrorsDelete(hub, res, await readBody(req)));
       if (path === "/api/remap" && req.method === "POST") return void (await handleRemap(hub, res, await readBody(req)));
-      if (path === "/api/config" && req.method === "GET") return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected });
+      if (path === "/api/config" && req.method === "GET") { const c = readAppConfig(); return void json(res, 200, { host: hub.conn.host, port: hub.conn.port, url: hub.conn.url, connected: hub.connected, haUrl: c.haUrl ?? "", haTokenSet: !!c.haToken || !!process.env.SUPERVISOR_TOKEN, haFromSupervisor: !!process.env.SUPERVISOR_TOKEN }); }
       if (path === "/api/config" && req.method === "POST") return void (await handleConfig(hub, res, await readBody(req)));
+      if (path === "/api/ha/status" && req.method === "GET") return void json(res, 200, await haPing());
+      if (path === "/api/ha/lights" && req.method === "GET") return void (await handleHaLights(res));
+      if (path === "/api/hub-mirrors" && req.method === "GET") return void (await handleHubMirrorsList(res));
+      if (path === "/api/hub-mirrors" && req.method === "POST") return void (await handleHubMirrorSave(res, await readBody(req)));
+      if (path === "/api/hub-mirrors/delete" && req.method === "POST") return void (await handleHubMirrorDelete(res, await readBody(req)));
       if (path.startsWith("/api/")) return void json(res, 404, { error: "unknown endpoint" });
       return void (await serveStatic(res, path));
     } catch (e: any) {
@@ -532,6 +578,68 @@ async function handleMirrorsDelete(hub: Hub, res: ServerResponse, body: any): Pr
   json(res, 200, { ok: true, doc });
 }
 
+// ---- Cross-protocol (hub) mirrors: HA lights kept in sync via a blueprint automation the tool owns.
+async function handleHaLights(res: ServerResponse): Promise<void> {
+  if (!haConfigured()) return void json(res, 200, { configured: false, lights: [] });
+  try { json(res, 200, { configured: true, lights: await listLights() }); }
+  catch (e: any) { json(res, 200, { configured: true, lights: [], error: e?.message ?? String(e) }); }
+}
+
+// List hub mirrors with live drift vs Home Assistant, plus any orphaned zwa automations HA still
+// has that no longer have a mirror entry here.
+async function handleHubMirrorsList(res: ServerResponse): Promise<void> {
+  const doc = loadMirrors(MIRRORS_FILE);
+  const hubs = doc.hubMirrors ?? [];
+  if (!haConfigured()) return void json(res, 200, { configured: false, hubMirrors: hubs.map((h) => ({ ...h, drift: { status: "unknown", detail: "Home Assistant not configured." } })), orphans: [] });
+  const out = [];
+  for (const h of hubs) {
+    let readback = null, err;
+    try { readback = await getAutomationConfig(hubAutomationId(h.name)); } catch (e: any) { err = e?.message ?? String(e); }
+    out.push({ ...h, drift: err ? { status: "unknown", detail: err } : hubDrift(h, readback) });
+  }
+  let orphans: string[] = [];
+  try {
+    const known = new Set(hubs.map((h) => hubAutomationId(h.name)));
+    orphans = (await listZwaAutomationIds()).filter((id) => isHubAutomationId(id) && !known.has(id));
+  } catch { /* listing orphans is best-effort */ }
+  json(res, 200, { configured: true, hubMirrors: out, orphans });
+}
+
+// Create/update one hub mirror: persist it, (re)deploy the blueprint, and write the HA automation.
+async function handleHubMirrorSave(res: ServerResponse, body: any): Promise<void> {
+  const m = body?.hubMirror as HubMirror;
+  if (!m || !m.name || !Array.isArray(m.entities)) return void json(res, 400, { error: "expected { hubMirror: { name, entities, tolerance } }" });
+  if (m.entities.length < 2) return void json(res, 400, { error: "a mirror needs at least two lights" });
+  if (!haConfigured()) return void json(res, 400, { error: "Home Assistant isn't configured — set a URL + long-lived token in Settings first." });
+  const doc = loadMirrors(MIRRORS_FILE);
+  const hub: HubMirror = { name: String(m.name), entities: m.entities.map(String), tolerance: m.tolerance != null ? Number(m.tolerance) : 4 };
+  doc.hubMirrors = [...(doc.hubMirrors ?? []).filter((h) => h.name !== hub.name), hub];
+  const bp = deployBlueprintIfPossible();
+  log(`HUB-MIRROR-SAVE "${hub.name}": ${hub.entities.join(" ⇄ ")} (blueprint: ${bp.deployed ? "ok" : bp.detail})`);
+  try {
+    await saveAutomationConfig(hubAutomationId(hub.name), hubAutomationConfig(hub));
+    await reloadAutomations();
+  } catch (e: any) {
+    return void json(res, 502, { error: `Saved locally, but Home Assistant rejected the automation: ${e?.message ?? String(e)}` });
+  }
+  saveMirrors(MIRRORS_FILE, doc); // persist only after HA accepted it
+  json(res, 200, { ok: true });
+}
+
+async function handleHubMirrorDelete(res: ServerResponse, body: any): Promise<void> {
+  const name = String(body?.name ?? "");
+  if (!name) return void json(res, 400, { error: "expected { name }" });
+  const doc = loadMirrors(MIRRORS_FILE);
+  if (haConfigured()) {
+    try { await deleteAutomationConfig(hubAutomationId(name)); await reloadAutomations(); }
+    catch (e: any) { if (!body?.force) return void json(res, 502, { error: `Couldn't remove the HA automation: ${e?.message ?? String(e)}. Retry, or force-remove from the tool only.` }); }
+  }
+  doc.hubMirrors = (doc.hubMirrors ?? []).filter((h) => h.name !== name);
+  saveMirrors(MIRRORS_FILE, doc);
+  log(`HUB-MIRROR-DELETE "${name}"`);
+  json(res, 200, { ok: true });
+}
+
 async function handleDiscover(hub: Hub, res: ServerResponse): Promise<void> {
   const adapter = await hub.ensure();
   const discovered = await discoverGangs(adapter);
@@ -557,8 +665,13 @@ async function handleSaveGangs(hub: Hub, res: ServerResponse, body: any): Promis
 async function handleConfig(hub: Hub, res: ServerResponse, body: any): Promise<void> {
   const host = String(body?.host ?? hub.conn.host);
   const port = Number(body?.port ?? hub.conn.port);
-  mkdirSync(dirname(CONFIG_FILE), { recursive: true });
-  writeFileSync(CONFIG_FILE, JSON.stringify({ host, port }, null, 2) + "\n");
+  // Home Assistant (for cross-protocol mirrors): only overwrite when the field is present, and keep
+  // a previously-saved token if the user leaves the token box blank on re-save.
+  const patch: AppConfig = { host, port };
+  if (body?.haUrl !== undefined) patch.haUrl = String(body.haUrl).trim();
+  if (body?.haToken) patch.haToken = String(body.haToken).trim();
+  const merged = writeAppConfig(patch);
+  setHaConfig(merged.haUrl, merged.haToken);
   const conn: Connection = { host, port, url: `ws://${host}:${port}` };
   try {
     await hub.connect(conn);

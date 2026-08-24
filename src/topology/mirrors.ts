@@ -19,10 +19,20 @@ export interface MirrorSpec {
   primary: number; // the HA-exposed member (forwarding on); must be one of members
   capabilities: CapabilityId[]; // which behaviours to mirror (onoff / level / dim)
 }
-export interface MirrorDoc { mirrors: MirrorSpec[]; }
+
+/** Cross-protocol "hub" mirror: two+ Home Assistant `light` entities kept in sync through a HA
+ *  blueprint automation (not Z-Wave associations). Used when the lights can't associate directly
+ *  — e.g. a Zigbee dimmer and a Z-Wave dimmer. The tool owns a HA automation per hub mirror. */
+export interface HubMirror {
+  name: string;
+  entities: string[]; // HA light entity_ids (≥2), kept in sync with each other
+  tolerance: number; // brightness tolerance 0–255 (absorbs cross-protocol rounding)
+}
+
+export interface MirrorDoc { mirrors: MirrorSpec[]; hubMirrors?: HubMirror[]; }
 
 export function loadMirrors(path: string): MirrorDoc {
-  if (!existsSync(path)) return { mirrors: [] };
+  if (!existsSync(path)) return { mirrors: [], hubMirrors: [] };
   const raw = (parse(readFileSync(path, "utf8")) ?? {}) as any;
   return {
     mirrors: (raw.mirrors ?? []).map((m: any) => ({
@@ -31,11 +41,19 @@ export function loadMirrors(path: string): MirrorDoc {
       primary: Number(m.primary),
       capabilities: (m.capabilities ?? ["onoff", "level", "dim"]) as CapabilityId[],
     })),
+    hubMirrors: (raw.hubMirrors ?? []).map((h: any) => ({
+      name: String(h.name ?? ""),
+      entities: (h.entities ?? []).map(String),
+      tolerance: h.tolerance != null ? Number(h.tolerance) : 4,
+    })),
   };
 }
 
 export function saveMirrors(path: string, doc: MirrorDoc): void {
-  const out = { mirrors: doc.mirrors.map((m) => ({ name: m.name, members: m.members, primary: m.primary, capabilities: m.capabilities })) };
+  const out = {
+    mirrors: doc.mirrors.map((m) => ({ name: m.name, members: m.members, primary: m.primary, capabilities: m.capabilities })),
+    ...(doc.hubMirrors?.length ? { hubMirrors: doc.hubMirrors.map((h) => ({ name: h.name, entities: h.entities, tolerance: h.tolerance })) } : {}),
+  };
   writeFileSync(path, "# Managed by zwave-associations (mirror groups: co-equal dimmers that track each other).\n\n" + stringify(out));
 }
 

@@ -77,7 +77,7 @@ test("teardown removes every inter-member association", async () => {
 
 test("mirrors.yaml round-trips", () => {
   const path = join(tmpdir(), `zwa-mirrors-${process.pid}.yaml`);
-  const doc: MirrorDoc = { mirrors: [{ name: "Closet", members: [59, 60], primary: 59, capabilities: ["onoff", "level", "dim"] }] };
+  const doc: MirrorDoc = { mirrors: [{ name: "Closet", members: [59, 60], primary: 59, capabilities: ["onoff", "level", "dim"] }], hubMirrors: [] };
   saveMirrors(path, doc);
   assert.deepEqual(loadMirrors(path), doc);
   rmSync(path, { force: true });
