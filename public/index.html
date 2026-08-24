@@ -159,6 +159,13 @@
         </div>
         <div class="sub" style="margin:4px 0 8px">Two or more loaded dimmers that track each other — on/off and brightness — via direct Z-Wave association. Pick one as the “primary” (the switch you expose to Home Assistant); hub changes to it relay to the rest, loop-free.</div>
         <div id="mirrorBody"></div>
+
+        <div class="row between" style="margin-top:26px">
+          <h2 style="margin:0">Cross-protocol mirrors</h2>
+          <button class="primary sm" id="btnNewHubMirror">+ New cross-protocol mirror</button>
+        </div>
+        <div class="sub" style="margin:4px 0 8px">Two or more Home Assistant lights kept in sync — on/off and brightness — through a blueprint automation this tool manages. Use this when the lights <b>can’t</b> associate directly (e.g. a Zigbee dimmer and a Z-Wave dimmer). Each one stays editable in Home Assistant; the tool flags drift if it’s changed there.</div>
+        <div id="hubMirrorBody"></div>
       </div>
     </main>
 
@@ -168,6 +175,7 @@
     <dialog id="deviceModal"></dialog>
     <dialog id="codeModal"></dialog>
     <dialog id="mirrorModal"></dialog>
+    <dialog id="hubMirrorModal"></dialog>
     <dialog id="settingsModal"></dialog>
     <div class="toast" id="toast"></div>
 
@@ -736,16 +744,25 @@
       }
 
       // ---- settings ----
-      function openSettings() {
+      async function openSettings() {
         const c = S.connection;
         const url = new URL(c.url);
+        const cfg = await api("/api/config").catch(() => ({}));
         const m = $("#settingsModal");
+        const haNote = cfg.haFromSupervisor
+          ? `<p class="sub">✓ Using this Home Assistant add-on’s built-in access — nothing to enter.</p>`
+          : `<label>Home Assistant URL</label><input id="sHaUrl" value="${esc(cfg.haUrl || "")}" placeholder="http://192.168.20.4:8123" />
+             <label>Long-lived access token${cfg.haTokenSet ? " (saved — leave blank to keep)" : ""}</label><input id="sHaTok" type="password" placeholder="${cfg.haTokenSet ? "•••••••• saved" : "paste a long-lived token"}" />
+             <p class="sub">Create one in Home Assistant → your profile → <b>Security</b> → Long-lived access tokens. Stored in config/config.json. Only needed for cross-protocol mirrors.</p>`;
         m.innerHTML = `<form method="dialog">
-          <div class="modal-h">zwave-js-server connection</div>
+          <div class="modal-h">Settings</div>
           <div class="modal-b">
+            <div class="sub" style="font-weight:600; margin-bottom:4px">zwave-js-server connection</div>
             <label>Host</label><input id="sHost" value="${esc(url.hostname)}" />
             <label>Port (the add-on's "Z-Wave JS server port", default 3000)</label><input id="sPort" value="${esc(url.port || "3000")}" />
             <p class="sub">Saved to config/config.json; the server reconnects on save.</p>
+            <div class="sub" style="font-weight:600; margin:16px 0 4px">Home Assistant <span class="sub" style="font-weight:400">(cross-protocol mirrors)</span></div>
+            ${haNote}
           </div>
           <div class="modal-f"><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save & connect</button></div>
         </form>`;
@@ -754,7 +771,11 @@
           if (m.returnValue !== "save") return;
           const host = m.querySelector("#sHost").value.trim();
           const port = Number(m.querySelector("#sPort").value);
-          const r = await api("/api/config", "POST", { host, port });
+          const body = { host, port };
+          const haUrlEl = m.querySelector("#sHaUrl"), haTokEl = m.querySelector("#sHaTok");
+          if (haUrlEl) body.haUrl = haUrlEl.value.trim();
+          if (haTokEl && haTokEl.value.trim()) body.haToken = haTokEl.value.trim();
+          const r = await api("/api/config", "POST", body);
           toast(r.connected ? "Connected ✓" : "Could not connect: " + (r.error || "?"));
           await loadState();
         });
@@ -997,7 +1018,7 @@
 
       // ---- Mirror (linked dimmers) ----
       let M = null;
-      async function loadMirrorTab() { M = await api("/api/mirrors"); renderMirrors(); }
+      async function loadMirrorTab() { M = await api("/api/mirrors"); renderMirrors(); loadHubMirrors(); }
 
       function renderMirrors() {
         const el = $("#mirrorBody");
@@ -1082,10 +1103,93 @@
           const capabilities = [...m.querySelectorAll("[data-cap]:checked")].map((x) => x.value);
           if (!name || members.length < 2 || !capabilities.length) { toast("Need a name, 2+ switches, and a behaviour"); return; }
           const mirror = { name, members, primary: members.includes(primary) ? primary : members[0], capabilities };
-          const doc = { mirrors: (M.doc.mirrors || []).slice() };
+          const doc = { mirrors: (M.doc.mirrors || []).slice(), hubMirrors: (M.doc.hubMirrors || []).slice() };
           const idx = existing ? doc.mirrors.findIndex((x) => x.name === existing.name) : -1;
           if (idx >= 0) doc.mirrors[idx] = mirror; else doc.mirrors.push(mirror);
           await saveMirrorDoc(doc);
+        });
+        m.showModal();
+      }
+
+      // ---- Cross-protocol (hub) mirrors: HA lights synced via a tool-managed blueprint automation ----
+      let HM = null; // /api/hub-mirrors
+      let HL = null; // /api/ha/lights
+      async function loadHubMirrors() {
+        [HM, HL] = await Promise.all([api("/api/hub-mirrors"), api("/api/ha/lights")]);
+        renderHubMirrors();
+      }
+      const lightName = (eid) => ((HL?.lights || []).find((l) => l.entity_id === eid) || {}).name || eid;
+
+      function renderHubMirrors() {
+        const el = $("#hubMirrorBody");
+        if (!HM) { el.innerHTML = ""; return; }
+        if (!HM.configured) {
+          el.innerHTML = `<div class="card"><b>Home Assistant isn’t connected.</b> <span class="sub">Add a URL and a long-lived access token in <b>Settings</b> to manage cross-protocol mirrors. <i>(Installed as a Home Assistant add-on, this is automatic — no token needed.)</i></span></div>`;
+          return;
+        }
+        const badge = { ok: '<span class="chip good">synced</span>', missing: '<span class="chip warn">not created</span>', drifted: '<span class="chip warn">drifted</span>', detached: '<span class="chip warn">detached</span>', unknown: '<span class="chip">unknown</span>' };
+        const cards = (HM.hubMirrors || []).map((h) => {
+          const d = h.drift || { status: "unknown", detail: "" };
+          const lights = (h.entities || []).map((e) => `<span class="chip">${esc(lightName(e))}</span>`).join(" ");
+          const detail = d.status === "ok" ? "" : `<div class="issue warn" style="margin-top:6px">${esc(d.detail)}${d.status === "drifted" || d.status === "detached" || d.status === "missing" ? ` <button class="sm" data-hmfix="${esc(h.name)}" style="margin-left:6px">Re-sync from tool</button>` : ""}</div>`;
+          return `<div class="card"><div class="gang-head"><span class="name">${esc(h.name)}</span> ${badge[d.status] || badge.unknown}<div class="spacer" style="flex:1"></div>
+            <button class="sm" data-hmedit="${esc(h.name)}">Edit</button>
+            <button class="sm ghost danger" data-hmdel="${esc(h.name)}">Delete</button></div>
+            <div class="row" style="gap:6px; margin:4px 0 2px"><span class="sub">In sync:</span> ${lights}</div>
+            <div class="sub" style="margin-top:2px">Brightness tolerance: ${esc(String(h.tolerance))}</div>${detail}</div>`;
+        }).join("");
+        const orphans = (HM.orphans || []).length
+          ? `<div class="card"><div class="sub"><b>Stray tool automations in Home Assistant</b> (no matching mirror here — likely left by a rename):</div>${HM.orphans.map((id) => `<div class="row" style="gap:8px; margin-top:4px; align-items:center"><span class="chip warn">${esc(id)}</span><button class="sm ghost danger" data-hmorphan="${esc(id)}">Remove from HA</button></div>`).join("")}</div>`
+          : "";
+        el.innerHTML = (cards || `<div class="card empty">No cross-protocol mirrors yet. Click <b>+ New cross-protocol mirror</b> to sync two or more Home Assistant lights.</div>`) + orphans;
+        el.querySelectorAll("[data-hmedit]").forEach((b) => b.onclick = () => openHubMirrorModal((HM.hubMirrors || []).find((x) => x.name === b.dataset.hmedit)));
+        el.querySelectorAll("[data-hmfix]").forEach((b) => b.onclick = () => saveHubMirror((HM.hubMirrors || []).find((x) => x.name === b.dataset.hmfix)));
+        el.querySelectorAll("[data-hmdel]").forEach((b) => b.onclick = () => deleteHubMirror(b.dataset.hmdel));
+        el.querySelectorAll("[data-hmorphan]").forEach((b) => b.onclick = () => deleteHubMirror(null, b.dataset.hmorphan));
+      }
+
+      async function saveHubMirror(h) {
+        toast("Saving to Home Assistant…");
+        const r = await api("/api/hub-mirrors", "POST", { hubMirror: { name: h.name, entities: h.entities, tolerance: h.tolerance } });
+        if (r.error) { console.error("[/api/hub-mirrors]", r); toast(r.error); } else toast("Saved ✓");
+        await loadHubMirrors();
+      }
+      async function deleteHubMirror(name, id) {
+        if (!confirm(`Delete "${name || id}"? This removes the Home Assistant automation too.`)) return;
+        const r = await api("/api/hub-mirrors/delete", "POST", id ? { id } : { name });
+        toast(r.ok ? "Deleted" : (r.error || "Delete failed"));
+        await loadHubMirrors();
+      }
+
+      function openHubMirrorModal(existing) {
+        if (!HM?.configured) { toast("Connect Home Assistant in Settings first"); return; }
+        if (!(HL?.lights || []).length) { toast("No Home Assistant lights found"); return; }
+        const m = $("#hubMirrorModal");
+        const cur = existing ? { name: existing.name, entities: existing.entities.slice(), tolerance: existing.tolerance } : { name: "", entities: [], tolerance: 4 };
+        const byRoom = {};
+        for (const l of HL.lights) { const r = (l.name.match(/^\[([^\]]+)\]/) || [])[1] || "Lights"; (byRoom[r] ??= []).push(l); }
+        const rows = Object.keys(byRoom).sort().map((room) => `<details style="margin-top:4px"${existing ? " open" : ""}><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${byRoom[room].length})</summary><div style="margin-top:2px">${byRoom[room].map((l) => `<label style="display:block; margin:2px 0"><input type="checkbox" data-hl value="${esc(l.entity_id)}" ${cur.entities.includes(l.entity_id) ? "checked" : ""} style="width:auto"/> ${esc(l.name)} <span class="sub">${esc(l.state)}</span></label>`).join("")}</div></details>`).join("");
+        m.innerHTML = `<form method="dialog"><div class="modal-h">${existing ? "Edit" : "New"} cross-protocol mirror</div><div class="modal-b">
+          <label class="sub">Name</label><input id="hmName" value="${esc(cur.name)}" placeholder="e.g. Kitchen &amp; Nook"/>
+          <div class="sub" style="margin-top:10px">Home Assistant lights to keep in sync (pick 2+). <input id="hmSearch" placeholder="filter…" style="margin-left:8px; width:160px; display:inline-block"/></div>
+          <div id="hmLights" style="margin-top:4px; max-height:260px; overflow:auto">${rows}</div>
+          <label class="sub" style="margin-top:12px; display:block">Brightness tolerance: <b id="hmTolVal">${cur.tolerance}</b> <span class="sub">(absorbs cross-protocol rounding; 3–5 is typical)</span></label>
+          <input id="hmTol" type="range" min="1" max="20" step="1" value="${cur.tolerance}" style="width:100%"/>
+          </div><div class="modal-f">${existing ? '<button class="ghost danger" value="delete">Delete</button>' : ""}<div class="spacer" style="flex:1"></div><button class="ghost" value="cancel">Cancel</button><button class="primary" value="save">Save &amp; sync to HA</button></div></form>`;
+        m.querySelector("#hmTol").oninput = (e) => { m.querySelector("#hmTolVal").textContent = e.target.value; };
+        m.querySelector("#hmSearch").oninput = (e) => { const q = e.target.value.toLowerCase(); m.querySelectorAll("#hmLights label").forEach((lab) => { lab.style.display = lab.textContent.toLowerCase().includes(q) ? "" : "none"; }); };
+        m.addEventListener("close", async function onClose() {
+          m.removeEventListener("close", onClose);
+          if (m.returnValue === "cancel" || !m.returnValue) return;
+          if (m.returnValue === "delete") { await deleteHubMirror(cur.name); return; }
+          const name = m.querySelector("#hmName").value.trim();
+          const entities = [...m.querySelectorAll("[data-hl]:checked")].map((x) => x.value);
+          const tolerance = Number(m.querySelector("#hmTol").value);
+          if (!name || entities.length < 2) { toast("Need a name and 2+ lights"); return; }
+          // A rename leaves the old automation orphaned — remove it after the new one is created.
+          const renamedFrom = existing && existing.name !== name ? existing.name : null;
+          await saveHubMirror({ name, entities, tolerance });
+          if (renamedFrom) await api("/api/hub-mirrors/delete", "POST", { name: renamedFrom }).then(loadHubMirrors);
         });
         m.showModal();
       }
@@ -1338,6 +1442,7 @@
       });
       $("#btnNewCode").onclick = () => { if (!C || !C.doc.locks.length) { toast("Add a door first (Access tab)"); return; } openCodeModal(null); };
       $("#btnNewMirror").onclick = () => { if (!M || !(M.switches || []).length) { toast("No switches found"); return; } openMirrorModal(null); };
+      $("#btnNewHubMirror").onclick = () => openHubMirrorModal(null);
       $("#btnSyncCodes").onclick = doCodesSync;
       $("#btnNewPolicy").onclick = () => openPolicyModal(null);
       $("#btnLedPolicy").onclick = () => {

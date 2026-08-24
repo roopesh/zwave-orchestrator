@@ -626,17 +626,19 @@ async function handleHubMirrorSave(res: ServerResponse, body: any): Promise<void
   json(res, 200, { ok: true });
 }
 
+// Delete a hub mirror by name, or clean up an orphaned automation directly by id (after a rename).
 async function handleHubMirrorDelete(res: ServerResponse, body: any): Promise<void> {
   const name = String(body?.name ?? "");
-  if (!name) return void json(res, 400, { error: "expected { name }" });
+  const id = body?.id ? String(body.id) : (name ? hubAutomationId(name) : "");
+  if (!id) return void json(res, 400, { error: "expected { name } or { id }" });
   const doc = loadMirrors(MIRRORS_FILE);
   if (haConfigured()) {
-    try { await deleteAutomationConfig(hubAutomationId(name)); await reloadAutomations(); }
+    try { await deleteAutomationConfig(id); await reloadAutomations(); }
     catch (e: any) { if (!body?.force) return void json(res, 502, { error: `Couldn't remove the HA automation: ${e?.message ?? String(e)}. Retry, or force-remove from the tool only.` }); }
   }
-  doc.hubMirrors = (doc.hubMirrors ?? []).filter((h) => h.name !== name);
+  doc.hubMirrors = (doc.hubMirrors ?? []).filter((h) => h.name !== name && hubAutomationId(h.name) !== id);
   saveMirrors(MIRRORS_FILE, doc);
-  log(`HUB-MIRROR-DELETE "${name}"`);
+  log(`HUB-MIRROR-DELETE ${name ? `"${name}"` : id}`);
   json(res, 200, { ok: true });
 }
 
