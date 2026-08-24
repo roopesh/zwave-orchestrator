@@ -778,6 +778,16 @@
       };
       const valueLabel = (def, v) => { if (v == null) return "?"; const o = def?.options?.find((x) => x.value === v); return o ? o.label : String(v); };
 
+      // Render a plan issue in human terms — device name + parameter label, never #id / pXX.
+      const humanParamIssue = (i) => {
+        const who = i.node ? esc(pShort(i.node)) : "";
+        const def = paramDefAny(i.param, i.key);
+        const lbl = esc(def ? def.label : "p" + i.param + (i.key !== undefined ? "[" + i.key + "]" : ""));
+        if (i.code === "NO_PARAM") return `${who} doesn’t have “${lbl}” — not applicable`;
+        if (i.code === "READ_ONLY") return `“${lbl}” on ${who} is read-only`;
+        return esc(i.message);
+      };
+
       async function loadParams() { P = await api("/api/params"); renderParams(); }
       function renderParams() { renderPolicies(); renderParamBrowse(); }
 
@@ -808,7 +818,7 @@
           const drift = acts.length
             ? `<div class="issue warn"><b>${acts.length}</b> setting(s) out of sync — <b>Sync</b> will fix:<div class="fix">${acts.map((a) => `#${a.node} ${esc(pShort(a.node))} — ${esc(a.label)}: ${esc(a.currentLabel)} → ${esc(a.desiredLabel)}`).join("<br>")}</div></div>`
             : `<div class="sub" style="margin-top:6px">✓ all target devices in sync</div>`;
-          const na = issues.length ? `<div class="sub" style="margin-top:6px">${issues.map((i) => esc(i.message)).join("<br>")}</div>` : "";
+          const na = issues.length ? `<div class="sub" style="margin-top:6px">${issues.map(humanParamIssue).join("<br>")}</div>` : "";
           return `<div class="card">
             <div class="gang-head"><span class="name">${esc(pol.name)}</span><div class="spacer" style="flex:1"></div>
               <button class="sm" data-pedit="${esc(pol.name)}">Edit</button>
