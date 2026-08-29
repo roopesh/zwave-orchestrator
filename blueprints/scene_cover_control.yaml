@@ -1,0 +1,187 @@
+blueprint:
+  name: Scene Controller → Covers (Zooz ZEN32 & similar)
+  author: zwave-associations
+  description: >
+    Drive covers/shades from the buttons on a Z-Wave scene controller. Built for
+    the Zooz ZEN32 (5 buttons) but works with any zwave-js device that sends
+    Central Scene events.
+
+    Every button is INDEPENDENT and OPTIONAL — set only the ones you use. A
+    button with action "None" (or no cover picked) is ignored, so this works for
+    a single shade, a dual light-filtering + blackout pair, or anything in
+    between.
+
+    Gestures: a single TAP runs the cover to its end (fully open / fully close).
+    PRESS-AND-HOLD starts it moving and RELEASE stops it partway — so hold gives
+    you partial positions. Toggle/Stop act on a tap.
+
+    Buttons are numbered by Central Scene number (1–5). Which physical button is
+    which varies by device — the easy way to map them is to fill these in, then
+    press each button and watch which cover moves.
+  domain: automation
+  input:
+    controller:
+      name: Scene controller
+      description: The ZEN32 (or any zwave-js Central Scene device).
+      input:
+        controller_device:
+          name: Controller device
+          selector:
+            device:
+              integration: zwave_js
+    button_1:
+      name: Button / Scene 1
+      icon: mdi:gesture-tap-button
+      collapsed: true
+      input:
+        b1_action:
+          name: What this button does
+          default: "None"
+          selector:
+            select:
+              options: ["None", "Open", "Close", "Toggle", "Stop"]
+        b1_cover:
+          name: Cover(s) to control
+          default: []
+          selector:
+            entity:
+              domain: cover
+              multiple: true
+    button_2:
+      name: Button / Scene 2
+      icon: mdi:gesture-tap-button
+      collapsed: true
+      input:
+        b2_action:
+          name: What this button does
+          default: "None"
+          selector:
+            select:
+              options: ["None", "Open", "Close", "Toggle", "Stop"]
+        b2_cover:
+          name: Cover(s) to control
+          default: []
+          selector:
+            entity:
+              domain: cover
+              multiple: true
+    button_3:
+      name: Button / Scene 3
+      icon: mdi:gesture-tap-button
+      collapsed: true
+      input:
+        b3_action:
+          name: What this button does
+          default: "None"
+          selector:
+            select:
+              options: ["None", "Open", "Close", "Toggle", "Stop"]
+        b3_cover:
+          name: Cover(s) to control
+          default: []
+          selector:
+            entity:
+              domain: cover
+              multiple: true
+    button_4:
+      name: Button / Scene 4
+      icon: mdi:gesture-tap-button
+      collapsed: true
+      input:
+        b4_action:
+          name: What this button does
+          default: "None"
+          selector:
+            select:
+              options: ["None", "Open", "Close", "Toggle", "Stop"]
+        b4_cover:
+          name: Cover(s) to control
+          default: []
+          selector:
+            entity:
+              domain: cover
+              multiple: true
+    button_5:
+      name: Button / Scene 5 (often the big relay button)
+      icon: mdi:gesture-tap-button
+      collapsed: true
+      input:
+        b5_action:
+          name: What this button does
+          default: "None"
+          selector:
+            select:
+              options: ["None", "Open", "Close", "Toggle", "Stop"]
+        b5_cover:
+          name: Cover(s) to control
+          default: []
+          selector:
+            entity:
+              domain: cover
+              multiple: true
+
+# queued so a hold's repeated events + other buttons don't stomp each other; the
+# actions are idempotent (open/close/stop) so serializing them is safe.
+mode: queued
+max: 15
+max_exceeded: silent
+
+variables:
+  by_scene:
+    "1": { action: !input b1_action, covers: !input b1_cover }
+    "2": { action: !input b2_action, covers: !input b2_cover }
+    "3": { action: !input b3_action, covers: !input b3_cover }
+    "4": { action: !input b4_action, covers: !input b4_cover }
+    "5": { action: !input b5_action, covers: !input b5_cover }
+  scene: "{{ trigger.event.data.property_key | int(0) | string }}"
+  gesture: "{{ trigger.event.data.value }}"
+  this_btn: "{{ by_scene.get(scene, {'action': 'None', 'covers': []}) }}"
+  act: "{{ this_btn.action }}"
+  covers: "{{ this_btn.covers }}"
+
+trigger:
+  - platform: event
+    event_type: zwave_js_value_notification
+    event_data:
+      device_id: !input controller_device
+
+condition:
+  # Only Central Scene (CC 91) notifications, and only for a button that's mapped.
+  - "{{ trigger.event.data.command_class == 91 }}"
+  - "{{ (covers | count) > 0 and act not in ['None', none] }}"
+
+action:
+  - choose:
+      # OPEN — tap/hold run it open; release stops it (partial).
+      - conditions: "{{ act == 'Open' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ gesture in ['KeyPressed', 'KeyHeldDown'] }}"
+                sequence:
+                  - service: cover.open_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ gesture == 'KeyReleased' }}"
+                sequence:
+                  - service: cover.stop_cover
+                    target: { entity_id: "{{ covers }}" }
+      # CLOSE — tap/hold run it closed; release stops it (partial).
+      - conditions: "{{ act == 'Close' }}"
+        sequence:
+          - choose:
+              - conditions: "{{ gesture in ['KeyPressed', 'KeyHeldDown'] }}"
+                sequence:
+                  - service: cover.close_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ gesture == 'KeyReleased' }}"
+                sequence:
+                  - service: cover.stop_cover
+                    target: { entity_id: "{{ covers }}" }
+      # TOGGLE / STOP — on a tap only.
+      - conditions: "{{ act == 'Toggle' and gesture == 'KeyPressed' }}"
+        sequence:
+          - service: cover.toggle
+            target: { entity_id: "{{ covers }}" }
+      - conditions: "{{ act == 'Stop' and gesture == 'KeyPressed' }}"
+        sequence:
+          - service: cover.stop_cover
+            target: { entity_id: "{{ covers }}" }

@@ -1118,7 +1118,7 @@
         [HM, HL] = await Promise.all([api("/api/hub-mirrors"), api("/api/ha/lights")]);
         renderHubMirrors();
       }
-      const lightName = (eid) => ((HL?.lights || []).find((l) => l.entity_id === eid) || {}).name || eid;
+      const lightName = (eid) => { const l = (HL?.lights || []).find((x) => x.entity_id === eid); return l ? l.name + (l.area ? ` (${l.area})` : "") : eid; };
 
       function renderHubMirrors() {
         const el = $("#hubMirrorBody");
@@ -1167,8 +1167,8 @@
         const m = $("#hubMirrorModal");
         const cur = existing ? { name: existing.name, entities: existing.entities.slice(), tolerance: existing.tolerance } : { name: "", entities: [], tolerance: 4 };
         const byRoom = {};
-        for (const l of HL.lights) { const r = (l.name.match(/^\[([^\]]+)\]/) || [])[1] || "Lights"; (byRoom[r] ??= []).push(l); }
-        const rows = Object.keys(byRoom).sort().map((room) => `<details style="margin-top:4px"${existing ? " open" : ""}><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${byRoom[room].length})</summary><div style="margin-top:2px">${byRoom[room].map((l) => `<label style="display:block; margin:2px 0"><input type="checkbox" data-hl value="${esc(l.entity_id)}" ${cur.entities.includes(l.entity_id) ? "checked" : ""} style="width:auto"/> ${esc(l.name)} <span class="sub">${esc(l.state)}</span></label>`).join("")}</div></details>`).join("");
+        for (const l of HL.lights) { (byRoom[l.area || "Other"] ??= []).push(l); }
+        const rows = Object.keys(byRoom).sort().map((room) => `<details style="margin-top:4px"${existing ? " open" : ""}><summary class="sub" style="cursor:pointer; font-weight:600">${esc(room)} (${byRoom[room].length})</summary><div style="margin-top:2px">${byRoom[room].map((l) => `<label style="display:flex; gap:8px; align-items:baseline; margin:3px 0"><input type="checkbox" data-hl value="${esc(l.entity_id)}" ${cur.entities.includes(l.entity_id) ? "checked" : ""} style="width:auto; flex:0 0 auto"/> <span>${esc(l.name)} <span class="sub">· ${esc(l.entity_id)} · ${esc(l.state)}</span></span></label>`).join("")}</div></details>`).join("");
         m.innerHTML = `<form method="dialog"><div class="modal-h">${existing ? "Edit" : "New"} cross-protocol mirror</div><div class="modal-b">
           <label class="sub">Name</label><input id="hmName" value="${esc(cur.name)}" placeholder="e.g. Kitchen &amp; Nook"/>
           <div class="sub" style="margin-top:10px">Home Assistant lights to keep in sync (pick 2+). <input id="hmSearch" placeholder="filter…" style="margin-left:8px; width:160px; display:inline-block"/></div>

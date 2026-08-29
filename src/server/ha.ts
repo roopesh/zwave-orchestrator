@@ -32,14 +32,26 @@ async function haFetch(path: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-export interface HaLight { entity_id: string; name: string; state: string; }
+export interface HaLight { entity_id: string; name: string; area: string; state: string; }
 export async function listLights(): Promise<HaLight[]> {
+  // Prefer the template API: it resolves each light's AREA (room) in one call. /states alone can't,
+  // and without a room the picker is a wall of identical "Ceiling Lights" (many devices share a name).
+  const tmpl = `{% set ns = namespace(items=[]) %}{% for s in states.light %}{% set ns.items = ns.items + [{"entity_id": s.entity_id, "name": s.name, "state": s.state, "area": area_name(s.entity_id)}] %}{% endfor %}{{ ns.items | tojson }}`;
+  try {
+    const r = await haFetch("/template", { method: "POST", body: JSON.stringify({ template: tmpl }) });
+    if (r.ok) {
+      const arr = JSON.parse(await r.text()) as any[];
+      return arr
+        .map((l) => ({ entity_id: String(l.entity_id), name: l.name || l.entity_id, area: l.area || "", state: l.state ?? "" }))
+        .sort((a, b) => (a.area || "~").localeCompare(b.area || "~") || a.name.localeCompare(b.name));
+    }
+  } catch { /* fall through to /states without area */ }
   const r = await haFetch("/states");
   if (!r.ok) throw new Error(`HA /states → ${r.status}`);
   const states = (await r.json()) as any[];
   return states
     .filter((s) => typeof s?.entity_id === "string" && s.entity_id.startsWith("light."))
-    .map((s) => ({ entity_id: s.entity_id, name: s.attributes?.friendly_name || s.entity_id, state: s.state }))
+    .map((s) => ({ entity_id: s.entity_id, name: s.attributes?.friendly_name || s.entity_id, area: "", state: s.state }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
