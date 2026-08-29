@@ -3,32 +3,34 @@ blueprint:
   author: zwave-associations
   description: >
     Drive covers/shades from the buttons on a Z-Wave scene controller. Built for
-    the Zooz ZEN32 (5 buttons) but works with any zwave-js device that sends
-    Central Scene events.
+    the Zooz ZEN32 (5 buttons) but works with any zwave-js device that exposes
+    per-button "Scene" event entities.
 
     Every button is INDEPENDENT and OPTIONAL — set only the ones you use. A
     button with action "None" (or no cover picked) is ignored, so this works for
-    a single shade, a dual light-filtering + blackout pair, or anything in
-    between.
+    a single shade, a dual light-filtering + blackout pair, or anything between.
 
     Gestures: a single TAP runs the cover to its end (fully open / fully close).
     PRESS-AND-HOLD starts it moving and RELEASE stops it partway — so hold gives
     you partial positions. Toggle/Stop act on a tap.
 
-    Buttons are numbered by Central Scene number (1–5). Which physical button is
-    which varies by device — the easy way to map them is to fill these in, then
-    press each button and watch which cover moves.
+    Buttons are numbered by Scene number (1–5). Which physical button is which
+    varies by device — fill these in, press each button, and watch which cover
+    moves to learn the mapping.
   domain: automation
   input:
     controller:
       name: Scene controller
-      description: The ZEN32 (or any zwave-js Central Scene device).
+      description: >
+        Pick the controller's button-event entities. On a Zooz ZEN32 these are
+        its "… Scene 001 / 002 / …" event entities — select all of them.
       input:
-        controller_device:
-          name: Controller device
+        scene_events:
+          name: Button-event entities
           selector:
-            device:
-              integration: zwave_js
+            entity:
+              domain: event
+              multiple: true
     button_1:
       name: Button / Scene 1
       icon: mdi:gesture-tap-button
@@ -126,29 +128,32 @@ mode: queued
 max: 15
 max_exceeded: silent
 
+# Keep !input only as direct top-level variable values (always substituted), then
+# build the scene->config lookup inside a template from those resolved variables.
 variables:
-  by_scene:
-    "1": { action: !input b1_action, covers: !input b1_cover }
-    "2": { action: !input b2_action, covers: !input b2_cover }
-    "3": { action: !input b3_action, covers: !input b3_cover }
-    "4": { action: !input b4_action, covers: !input b4_cover }
-    "5": { action: !input b5_action, covers: !input b5_cover }
-  scene: "{{ trigger.event.data.property_key | int(0) | string }}"
-  gesture: "{{ trigger.event.data.value }}"
-  this_btn: "{{ by_scene.get(scene, {'action': 'None', 'covers': []}) }}"
-  act: "{{ this_btn.action }}"
-  covers: "{{ this_btn.covers }}"
+  a1: !input b1_action
+  c1: !input b1_cover
+  a2: !input b2_action
+  c2: !input b2_cover
+  a3: !input b3_action
+  c3: !input b3_cover
+  a4: !input b4_action
+  c4: !input b4_cover
+  a5: !input b5_action
+  c5: !input b5_cover
+  scene: "{{ trigger.entity_id.rsplit('_', 1)[-1] | int(0) }}"
+  gesture: "{{ trigger.to_state.attributes.event_type }}"
+  act: "{{ {1: a1, 2: a2, 3: a3, 4: a4, 5: a5}.get(scene, 'None') }}"
+  covers: "{{ {1: c1, 2: c2, 3: c3, 4: c4, 5: c5}.get(scene, []) }}"
 
 trigger:
-  - platform: event
-    event_type: zwave_js_value_notification
-    event_data:
-      device_id: !input controller_device
+  - platform: state
+    entity_id: !input scene_events
 
 condition:
-  # Only Central Scene (CC 91) notifications, and only for a button that's mapped.
-  - "{{ trigger.event.data.command_class == 91 }}"
+  # A mapped button, and a real button gesture (ignore the null on restore).
   - "{{ (covers | count) > 0 and act not in ['None', none] }}"
+  - "{{ gesture in ['KeyPressed', 'KeyHeldDown', 'KeyReleased'] }}"
 
 action:
   - choose:
