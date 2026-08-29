@@ -7,12 +7,15 @@ blueprint:
     per-button "Scene" event entities.
 
     Every button is INDEPENDENT and OPTIONAL — set only the ones you use. A
-    button with action "None" (or no cover picked) is ignored, so this works for
-    a single shade, a dual light-filtering + blackout pair, or anything between.
+    button with no cover picked, or all actions "None", is ignored. Works for a
+    single shade, a dual light-filtering + blackout pair, or anything between.
 
-    Gestures: a single TAP runs the cover to its end (fully open / fully close).
-    PRESS-AND-HOLD starts it moving and RELEASE stops it partway — so hold gives
-    you partial positions. Toggle/Stop act on a tap.
+    Per button you can bind a SINGLE tap, a DOUBLE tap, and a TRIPLE tap
+    separately (all on the same cover(s)):
+      • Single tap runs the cover to its end (fully open / fully close). Press-
+        and-hold starts it moving and RELEASE stops it partway (partial position).
+      • Double / triple tap can Open, Close, Toggle, Stop, or "Set position" to a
+        chosen % (0 = closed, 100 = fully open) — e.g. double-tap → 50%.
 
     Buttons are numbered by Scene number (1–5). Which physical button is which
     varies by device — fill these in, press each button, and watch which cover
@@ -36,157 +39,276 @@ blueprint:
       icon: mdi:gesture-tap-button
       collapsed: true
       input:
-        b1_action:
-          name: What this button does
-          default: "None"
-          selector:
-            select:
-              options: ["None", "Open", "Close", "Toggle", "Stop"]
         b1_cover:
-          name: Cover(s) to control
+          name: Cover(s) this button controls
           default: []
-          selector:
-            entity:
-              domain: cover
-              multiple: true
+          selector: { entity: { domain: cover, multiple: true } }
+        b1_action:
+          name: Single tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Toggle", "Stop"] } }
+        b1_2x_action:
+          name: Double tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b1_2x_position:
+          name: Double-tap position (when set to "Set position")
+          default: 50
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
+        b1_3x_action:
+          name: Triple tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b1_3x_position:
+          name: Triple-tap position (when set to "Set position")
+          default: 25
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
     button_2:
       name: Button / Scene 2
       icon: mdi:gesture-tap-button
       collapsed: true
       input:
-        b2_action:
-          name: What this button does
-          default: "None"
-          selector:
-            select:
-              options: ["None", "Open", "Close", "Toggle", "Stop"]
         b2_cover:
-          name: Cover(s) to control
+          name: Cover(s) this button controls
           default: []
-          selector:
-            entity:
-              domain: cover
-              multiple: true
+          selector: { entity: { domain: cover, multiple: true } }
+        b2_action:
+          name: Single tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Toggle", "Stop"] } }
+        b2_2x_action:
+          name: Double tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b2_2x_position:
+          name: Double-tap position (when set to "Set position")
+          default: 50
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
+        b2_3x_action:
+          name: Triple tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b2_3x_position:
+          name: Triple-tap position (when set to "Set position")
+          default: 25
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
     button_3:
       name: Button / Scene 3
       icon: mdi:gesture-tap-button
       collapsed: true
       input:
-        b3_action:
-          name: What this button does
-          default: "None"
-          selector:
-            select:
-              options: ["None", "Open", "Close", "Toggle", "Stop"]
         b3_cover:
-          name: Cover(s) to control
+          name: Cover(s) this button controls
           default: []
-          selector:
-            entity:
-              domain: cover
-              multiple: true
+          selector: { entity: { domain: cover, multiple: true } }
+        b3_action:
+          name: Single tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Toggle", "Stop"] } }
+        b3_2x_action:
+          name: Double tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b3_2x_position:
+          name: Double-tap position (when set to "Set position")
+          default: 50
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
+        b3_3x_action:
+          name: Triple tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b3_3x_position:
+          name: Triple-tap position (when set to "Set position")
+          default: 25
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
     button_4:
       name: Button / Scene 4
       icon: mdi:gesture-tap-button
       collapsed: true
       input:
-        b4_action:
-          name: What this button does
-          default: "None"
-          selector:
-            select:
-              options: ["None", "Open", "Close", "Toggle", "Stop"]
         b4_cover:
-          name: Cover(s) to control
+          name: Cover(s) this button controls
           default: []
-          selector:
-            entity:
-              domain: cover
-              multiple: true
+          selector: { entity: { domain: cover, multiple: true } }
+        b4_action:
+          name: Single tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Toggle", "Stop"] } }
+        b4_2x_action:
+          name: Double tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b4_2x_position:
+          name: Double-tap position (when set to "Set position")
+          default: 50
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
+        b4_3x_action:
+          name: Triple tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b4_3x_position:
+          name: Triple-tap position (when set to "Set position")
+          default: 25
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
     button_5:
       name: Button / Scene 5 (often the big relay button)
       icon: mdi:gesture-tap-button
       collapsed: true
       input:
-        b5_action:
-          name: What this button does
-          default: "None"
-          selector:
-            select:
-              options: ["None", "Open", "Close", "Toggle", "Stop"]
         b5_cover:
-          name: Cover(s) to control
+          name: Cover(s) this button controls
           default: []
-          selector:
-            entity:
-              domain: cover
-              multiple: true
+          selector: { entity: { domain: cover, multiple: true } }
+        b5_action:
+          name: Single tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Toggle", "Stop"] } }
+        b5_2x_action:
+          name: Double tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b5_2x_position:
+          name: Double-tap position (when set to "Set position")
+          default: 50
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
+        b5_3x_action:
+          name: Triple tap
+          default: "None"
+          selector: { select: { options: ["None", "Open", "Close", "Set position", "Toggle", "Stop"] } }
+        b5_3x_position:
+          name: Triple-tap position (when set to "Set position")
+          default: 25
+          selector: { number: { min: 0, max: 100, step: 5, mode: slider, unit_of_measurement: "%" } }
 
 # queued so a hold's repeated events + other buttons don't stomp each other; the
-# actions are idempotent (open/close/stop) so serializing them is safe.
+# actions are idempotent (open/close/stop/set) so serializing them is safe.
 mode: queued
 max: 15
 max_exceeded: silent
 
 # Keep !input only as direct top-level variable values (always substituted), then
-# build the scene->config lookup inside a template from those resolved variables.
+# build the scene->config lookups inside templates from those resolved variables.
 variables:
-  a1: !input b1_action
-  c1: !input b1_cover
-  a2: !input b2_action
-  c2: !input b2_cover
-  a3: !input b3_action
-  c3: !input b3_cover
-  a4: !input b4_action
-  c4: !input b4_cover
-  a5: !input b5_action
-  c5: !input b5_cover
+  cv1: !input b1_cover
+  cv2: !input b2_cover
+  cv3: !input b3_cover
+  cv4: !input b4_cover
+  cv5: !input b5_cover
+  s1: !input b1_action
+  s2: !input b2_action
+  s3: !input b3_action
+  s4: !input b4_action
+  s5: !input b5_action
+  d1: !input b1_2x_action
+  d2: !input b2_2x_action
+  d3: !input b3_2x_action
+  d4: !input b4_2x_action
+  d5: !input b5_2x_action
+  dp1: !input b1_2x_position
+  dp2: !input b2_2x_position
+  dp3: !input b3_2x_position
+  dp4: !input b4_2x_position
+  dp5: !input b5_2x_position
+  t1: !input b1_3x_action
+  t2: !input b2_3x_action
+  t3: !input b3_3x_action
+  t4: !input b4_3x_action
+  t5: !input b5_3x_action
+  tp1: !input b1_3x_position
+  tp2: !input b2_3x_position
+  tp3: !input b3_3x_position
+  tp4: !input b4_3x_position
+  tp5: !input b5_3x_position
   scene: "{{ trigger.entity_id.rsplit('_', 1)[-1] | int(0) }}"
   gesture: "{{ trigger.to_state.attributes.event_type }}"
-  act: "{{ {1: a1, 2: a2, 3: a3, 4: a4, 5: a5}.get(scene, 'None') }}"
-  covers: "{{ {1: c1, 2: c2, 3: c3, 4: c4, 5: c5}.get(scene, []) }}"
+  covers: "{{ {1: cv1, 2: cv2, 3: cv3, 4: cv4, 5: cv5}.get(scene, []) }}"
+  tap: "{{ {1: s1, 2: s2, 3: s3, 4: s4, 5: s5}.get(scene, 'None') }}"
+  dbl: "{{ {1: d1, 2: d2, 3: d3, 4: d4, 5: d5}.get(scene, 'None') }}"
+  dblpos: "{{ {1: dp1, 2: dp2, 3: dp3, 4: dp4, 5: dp5}.get(scene, 50) | int }}"
+  tpl: "{{ {1: t1, 2: t2, 3: t3, 4: t4, 5: t5}.get(scene, 'None') }}"
+  tplpos: "{{ {1: tp1, 2: tp2, 3: tp3, 4: tp4, 5: tp5}.get(scene, 25) | int }}"
 
 trigger:
   - platform: state
     entity_id: !input scene_events
 
 condition:
-  # A mapped button, and a real button gesture (ignore the null on restore).
-  - "{{ (covers | count) > 0 and act not in ['None', none] }}"
-  - "{{ gesture in ['KeyPressed', 'KeyHeldDown', 'KeyReleased'] }}"
+  # A mapped button only (unmapped scenes have no covers).
+  - "{{ (covers | count) > 0 }}"
 
 action:
   - choose:
-      # OPEN — tap/hold run it open; release stops it (partial).
-      - conditions: "{{ act == 'Open' }}"
+      # SINGLE TAP / HOLD / RELEASE — uses the single-tap action.
+      - conditions: "{{ gesture in ['KeyPressed', 'KeyHeldDown', 'KeyReleased'] }}"
         sequence:
           - choose:
-              - conditions: "{{ gesture in ['KeyPressed', 'KeyHeldDown'] }}"
+              - conditions: "{{ tap in ['Open'] and gesture in ['KeyPressed', 'KeyHeldDown'] }}"
                 sequence:
                   - service: cover.open_cover
                     target: { entity_id: "{{ covers }}" }
-              - conditions: "{{ gesture == 'KeyReleased' }}"
-                sequence:
-                  - service: cover.stop_cover
-                    target: { entity_id: "{{ covers }}" }
-      # CLOSE — tap/hold run it closed; release stops it (partial).
-      - conditions: "{{ act == 'Close' }}"
-        sequence:
-          - choose:
-              - conditions: "{{ gesture in ['KeyPressed', 'KeyHeldDown'] }}"
+              - conditions: "{{ tap in ['Close'] and gesture in ['KeyPressed', 'KeyHeldDown'] }}"
                 sequence:
                   - service: cover.close_cover
                     target: { entity_id: "{{ covers }}" }
-              - conditions: "{{ gesture == 'KeyReleased' }}"
+              - conditions: "{{ tap in ['Open', 'Close'] and gesture == 'KeyReleased' }}"
                 sequence:
                   - service: cover.stop_cover
                     target: { entity_id: "{{ covers }}" }
-      # TOGGLE / STOP — on a tap only.
-      - conditions: "{{ act == 'Toggle' and gesture == 'KeyPressed' }}"
+              - conditions: "{{ tap == 'Toggle' and gesture == 'KeyPressed' }}"
+                sequence:
+                  - service: cover.toggle
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ tap == 'Stop' and gesture == 'KeyPressed' }}"
+                sequence:
+                  - service: cover.stop_cover
+                    target: { entity_id: "{{ covers }}" }
+      # DOUBLE TAP — uses the double-tap action + position.
+      - conditions: "{{ gesture == 'KeyPressed2x' }}"
         sequence:
-          - service: cover.toggle
-            target: { entity_id: "{{ covers }}" }
-      - conditions: "{{ act == 'Stop' and gesture == 'KeyPressed' }}"
+          - choose:
+              - conditions: "{{ dbl == 'Open' }}"
+                sequence:
+                  - service: cover.open_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ dbl == 'Close' }}"
+                sequence:
+                  - service: cover.close_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ dbl == 'Set position' }}"
+                sequence:
+                  - service: cover.set_cover_position
+                    target: { entity_id: "{{ covers }}" }
+                    data: { position: "{{ dblpos }}" }
+              - conditions: "{{ dbl == 'Toggle' }}"
+                sequence:
+                  - service: cover.toggle
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ dbl == 'Stop' }}"
+                sequence:
+                  - service: cover.stop_cover
+                    target: { entity_id: "{{ covers }}" }
+      # TRIPLE TAP — uses the triple-tap action + position.
+      - conditions: "{{ gesture == 'KeyPressed3x' }}"
         sequence:
-          - service: cover.stop_cover
-            target: { entity_id: "{{ covers }}" }
+          - choose:
+              - conditions: "{{ tpl == 'Open' }}"
+                sequence:
+                  - service: cover.open_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ tpl == 'Close' }}"
+                sequence:
+                  - service: cover.close_cover
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ tpl == 'Set position' }}"
+                sequence:
+                  - service: cover.set_cover_position
+                    target: { entity_id: "{{ covers }}" }
+                    data: { position: "{{ tplpos }}" }
+              - conditions: "{{ tpl == 'Toggle' }}"
+                sequence:
+                  - service: cover.toggle
+                    target: { entity_id: "{{ covers }}" }
+              - conditions: "{{ tpl == 'Stop' }}"
+                sequence:
+                  - service: cover.stop_cover
+                    target: { entity_id: "{{ covers }}" }
