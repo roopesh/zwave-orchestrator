@@ -35,7 +35,7 @@ Associations, parameters, lock codes, and Z-Wave mirrors work with **just zwave-
 
 ### Home Assistant add-on (recommended)
 
-Best if you want the cross-protocol and scene features: it wires up Home Assistant access for you (Supervisor token, blueprint deploys) and serves the UI in the HA sidebar via ingress. See [`hassio-addon/DOCS.md`](hassio-addon/DOCS.md) to add the repository and install.
+Best if you want the cross-protocol and scene features: it wires up Home Assistant access for you (Supervisor token, blueprint deploys) and serves the UI in the HA sidebar via ingress. In HA, add this repo as a custom add-on repository (**Settings → Add-ons → Add-on Store → ⋮ → Repositories**), then install **Z-Wave Orchestrator** — it builds from source on first install. Full steps in [`DOCS.md`](DOCS.md).
 
 ### Docker
 

@@ -1,0 +1,36 @@
+# Home Assistant add-on manifest. This repo is a single add-on at its root: with no `image:` key,
+# Home Assistant builds it from the Dockerfile here on install (no prebuilt image needed). To switch
+# to a prebuilt image later, add `image: ghcr.io/roopesh/zwave-orchestrator` and bump `version` — the
+# slug stays the same, so installed users just get an in-place Update.
+name: Z-Wave Orchestrator
+version: "0.1.0"
+slug: zwave_orchestrator
+description: >-
+  Declarative manager for a Z-Wave mesh — associations/multi-way switches, device parameters, lock
+  codes, native + cross-protocol light mirrors, and scene control. Talks to zwave-js-server.
+url: https://github.com/roopesh/zwave-orchestrator
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+# Serve the UI through Home Assistant's authenticated ingress (sidebar panel + mobile app).
+ingress: true
+ingress_port: 8090
+panel_icon: mdi:lan-connect
+panel_title: Z-Wave Orch
+# HA's main config is mapped at /homeassistant so the tool can deploy the cross-protocol mirror and
+# scene blueprints; homeassistant_api gives the Supervisor token those features use. The tool's own
+# config (gangs/policies/devices/codes/mirrors.yaml) persists in the add-on's /data volume.
+map:
+  - homeassistant_config:rw
+homeassistant_api: true
+# zwave-js-server connection. Defaults to the community Z-Wave JS UI add-on hostname; change it in the
+# Configuration tab to your server's host (or a LAN IP). Its WebSocket "Z-Wave JS server" port must be
+# enabled.
+options:
+  zws_host: a0d7b954-zwave-js-ui
+  zws_port: 3000
+schema:
+  zws_host: str
+  zws_port: port

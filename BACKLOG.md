@@ -106,17 +106,16 @@ codes) to test against before calling it generalized.
 - **DONE (code):** frontend is ingress-ready (all API calls resolved relative to the served
   path, so it works under HA's `/api/hassio_ingress/<token>/` prefix — verified for standalone
   and ingress URLs). The image reads its zwave-js-server host/port from HA add-on options
-  (`/data/options.json`) and persists `codes.yaml` in `/data`. `hassio-addon/` (config.yaml +
-  DOCS.md) + `repository.yaml` package it; `docker-publish` now builds multi-arch (amd64/arm64/
-  armv7).
-- **TODO (user):** replace `roopesh`, push a tag to build/publish the GHCR image, make it public,
-  then add the repo in HA (Add-on Store → Repositories) and install. Ingress can only be fully
-  validated inside HA — the standalone app is verified.
+  (`/data/options.json`) and persists `codes.yaml` in `/data`. The repo root is now a single
+  **build-from-source add-on** (`config.yaml` + root `Dockerfile`, no `image:`); `docker-publish`
+  can build a multi-arch image (amd64/arm64/armv7) for the optional prebuilt-image path.
+- **TODO (user):** add the repo in HA (Add-on Store → ⋮ → Repositories → this repo's URL) and
+  install to validate the build + ingress inside HA — the standalone app is verified, but an
+  in-HA install can only be confirmed there. Optionally switch to a prebuilt GHCR image later
+  (see `PUBLISHING.md`).
 
-## Publishing (needs the user's accounts — not code work)
+## Publishing (repo is live at github.com/roopesh/zwave-orchestrator)
 
-- Create the GitHub repo, push, replace `roopesh` in `package.json`, `hassio-addon/config.yaml`,
-  and `repository.yaml`.
-- Set `NPM_TOKEN` repo secret if publishing to npm.
-- Cut a tagged release once the above is done (triggers the Docker/npm workflows already in
-  `.github/workflows/`).
+- Optional: publish to npm — set the `NPM_TOKEN` repo secret, then cut a GitHub Release.
+- Optional: prebuilt GHCR image for one-click installs — see `PUBLISHING.md` (add `image:` to
+  `config.yaml`, push a `v*` tag, make the package public).

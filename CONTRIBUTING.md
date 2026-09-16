@@ -37,7 +37,7 @@ Point it at your controller with the web UI **Settings**, or `--host`/`--port` f
 | `src/server/` | `index.ts` (node:http server + JSON API, serves the UI) and `ha.ts` (Home Assistant REST client for cross-protocol mirrors). |
 | `public/index.html` | The entire single-page UI (vanilla JS, no framework, no build). |
 | `blueprints/` | Home Assistant blueprints the tool deploys (cross-protocol mirror, scene-controller → covers). |
-| `hassio-addon/` | Home Assistant add-on packaging. |
+| `config.yaml`, `DOCS.md` | Home Assistant add-on manifest + docs — the repo root is a single build-from-source add-on (HA builds the root `Dockerfile` on install). |
 | `src/test/` | `node --test` suites with a `MockAdapter` — no hardware needed. |
 
 ## How it works (the mental model)
@@ -65,6 +65,6 @@ Open a GitHub issue. For bugs, include your controller/zwave-js-server version, 
 
 ## Home Assistant add-on
 
-The add-on builds from source via its `Dockerfile` (`hassio-addon/`). It serves the same UI through HA ingress and uses the Supervisor token for the Home Assistant API. Changes to `src/` and `public/` must be re-synced into the add-on and rebuilt to take effect there.
+The repo root is a single Home Assistant add-on: `config.yaml` (manifest, no `image:` so HA builds it) + the root `Dockerfile`. It serves the same UI through HA ingress and uses the Supervisor token for the Home Assistant API. To move to prebuilt images later, add an `image:` key and publish via the `docker-publish` workflow — the slug stays the same, so installs update in place.
 
 By contributing, you agree your contributions are licensed under the project's [MIT License](LICENSE).

@@ -17,13 +17,17 @@ ENV NODE_ENV=production \
     POLICIES_FILE=/data/policies.yaml \
     DEVICES_FILE=/data/devices.yaml \
     CODES_FILE=/data/codes.yaml \
-    MIRRORS_FILE=/data/mirrors.yaml
+    MIRRORS_FILE=/data/mirrors.yaml \
+    HA_CONFIG_DIR=/homeassistant
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY public ./public
+COPY blueprints ./blueprints
 COPY gangs.example.yaml ./gangs.example.yaml
 RUN mkdir -p /data
 EXPOSE 8090
-# Configure the controller with -e ZWS_HOST=... -e ZWS_PORT=3000 and mount -v ./data:/data
+# Standalone: -e ZWS_HOST=... -e ZWS_PORT=3000 and mount -v ./data:/data.
+# As a Home Assistant add-on: HA writes options to /data/options.json, maps its config at
+# /homeassistant (for the cross-protocol/scene blueprints), and provides the Supervisor token.
 CMD ["node", "dist/server.js"]

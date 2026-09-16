@@ -9,3 +9,6 @@ gangs.yaml
 policies.yaml
 devices.yaml
 config/config.json
+# Personal data — never send to the build context
+codes.yaml
+mirrors.yaml
