@@ -1,5 +1,5 @@
 {
-  "name": "zwave-associations",
+  "name": "zwave-orchestrator",
   "version": "0.1.0",
   "description": "Declarative association manager for Z-Wave companion / 3-way switches, driven by the zwave-js-server API.",
   "type": "module",
@@ -18,16 +18,16 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/zwave-associations.git"
+    "url": "git+https://github.com/roopesh/zwave-orchestrator.git"
   },
-  "homepage": "https://github.com/OWNER/zwave-associations#readme",
-  "bugs": "https://github.com/OWNER/zwave-associations/issues",
+  "homepage": "https://github.com/roopesh/zwave-orchestrator#readme",
+  "bugs": "https://github.com/roopesh/zwave-orchestrator/issues",
   "engines": {
     "node": ">=20.11"
   },
   "bin": {
-    "zwave-associations": "dist/server.js",
-    "zwave-assoc": "dist/cli.js"
+    "zwave-orchestrator": "dist/server.js",
+    "zorc": "dist/cli.js"
   },
   "files": [
     "dist",

@@ -13,7 +13,7 @@ radio directly.
 ## Install
 
 1. In HA: **Settings → Add-ons → Add-on Store → ⋮ (top right) → Repositories**, and add:
-   `https://github.com/OWNER/zwave-associations`
+   `https://github.com/roopesh/zwave-orchestrator`
 2. Find **Z-Wave Associations** in the store and click **Install**.
 3. Open the **Configuration** tab and set:
    - **zws_host** — the hostname of your Z-Wave JS server add-on. For the community
@@ -34,11 +34,11 @@ contains door PINs in plaintext**; it never leaves the add-on and is never commi
 This add-on pulls a prebuilt image from GitHub Container Registry. Before it can install,
 the image must exist:
 
-1. Replace `OWNER` with your GitHub username in `hassio-addon/config.yaml`, `repository.yaml`,
+1. Replace `roopesh` with your GitHub username in `hassio-addon/config.yaml`, `repository.yaml`,
    and `package.json`.
 2. Push the repo to GitHub and cut a tag (`git tag v0.1.0 && git push --tags`) — the
    `docker-publish` workflow builds and pushes the multi-arch image to
-   `ghcr.io/OWNER/zwave-associations`.
+   `ghcr.io/roopesh/zwave-orchestrator`.
 3. Make the GHCR package public (or configure HA with a registry login).
 
 The add-on `version` in `config.yaml` must match a published image tag.

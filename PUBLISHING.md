@@ -12,13 +12,13 @@ The repo ships three GitHub Actions workflows:
 
 1. Create the GitHub repo and push:
    ```bash
-   git remote add origin git@github.com:<OWNER>/zwave-associations.git
+   git remote add origin git@github.com:<roopesh>/zwave-orchestrator.git
    git push -u origin main
    ```
-2. **Replace `OWNER`** in `package.json` (`repository`, `homepage`, `bugs`) with your GitHub
-   username/org. GHCR images publish to `ghcr.io/<OWNER>/zwave-associations` automatically.
+2. **Replace `roopesh`** in `package.json` (`repository`, `homepage`, `bugs`) with your GitHub
+   username/org. GHCR images publish to `ghcr.io/<roopesh>/zwave-orchestrator` automatically.
 3. For npm: create an automation token at npmjs.com and add it as the repo secret `NPM_TOKEN`
-   (Settings → Secrets and variables → Actions). Also confirm the package name `zwave-associations`
+   (Settings → Secrets and variables → Actions). Also confirm the package name `zwave-orchestrator`
    is available, or rename it.
 
 ## Cut a release
@@ -30,7 +30,7 @@ npm version patch          # or minor / major
 git push --follow-tags
 ```
 
-- Pushing the `v0.1.1` tag triggers **docker-publish** → `ghcr.io/<OWNER>/zwave-associations:0.1.1`
+- Pushing the `v0.1.1` tag triggers **docker-publish** → `ghcr.io/<roopesh>/zwave-orchestrator:0.1.1`
   and `:latest`. Make the GHCR package **public** once (repo → Packages → package → settings).
 - To publish to npm, create a **GitHub Release** from that tag — that triggers **npm-publish**.
 
@@ -38,5 +38,5 @@ git push --follow-tags
 
 ```bash
 npm run build && npm pack --dry-run     # inspect what npm would publish
-docker build -t zwave-associations .    # verified working on this project
+docker build -t zwave-orchestrator .    # verified working on this project
 ```

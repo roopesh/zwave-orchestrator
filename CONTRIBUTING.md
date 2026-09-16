@@ -1,4 +1,4 @@
-# Contributing to zwave-associations
+# Contributing to zwave-orchestrator
 
 Thanks for helping out. This is a self-hostable tool for managing Z-Wave **associations** (companion / multi-way switches), **device parameters**, **lock codes**, and **cross-protocol light sync** — all as declarative config that the tool reconciles against your live mesh. It talks to the **zwave-js-server** WebSocket API (the same one Home Assistant uses) and ships both a web UI and a CLI, plus a Home Assistant add-on.
 

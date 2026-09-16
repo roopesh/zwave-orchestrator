@@ -1,12 +1,12 @@
 # Home Assistant add-on manifest. Uses the prebuilt multi-arch image published to GHCR by
-# .github/workflows/docker-publish.yml (replace OWNER once your GitHub repo exists).
+# .github/workflows/docker-publish.yml (replace roopesh once your GitHub repo exists).
 name: Z-Wave Associations
 version: "0.1.0"
-slug: zwave_associations
+slug: zwave_orchestrator
 description: Manage Z-Wave associations, device parameters, and lock user codes for companion/3-way switches.
-url: https://github.com/OWNER/zwave-associations
+url: https://github.com/roopesh/zwave-orchestrator
 # The published manifest is multi-arch, so one image tag serves every board.
-image: "ghcr.io/OWNER/zwave-associations"
+image: "ghcr.io/roopesh/zwave-orchestrator"
 arch:
   - amd64
   - aarch64

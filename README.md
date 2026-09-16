@@ -1,4 +1,4 @@
-# zwave-associations
+# zwave-orchestrator
 
 Declarative association manager for Z-Wave **companion / 3-way switches**. You describe your
 switch _gangs_ once; the tool reconciles your controller to match — instant, Home-Assistant-
@@ -31,10 +31,10 @@ needs no browser access to the Z-Wave JS UI page and works headless.
 ### Docker (recommended for a homelab / Proxmox box)
 
 ```bash
-docker build -t zwave-associations .
-docker run -d --name zwave-assoc -p 8090:8090 \
+docker build -t zwave-orchestrator .
+docker run -d --name zorc -p 8090:8090 \
   -e ZWS_HOST=192.168.1.50 -e ZWS_PORT=3000 \
-  -v "$PWD/data:/data" zwave-associations
+  -v "$PWD/data:/data" zwave-orchestrator
 # open http://localhost:8090
 ```
 
@@ -44,9 +44,9 @@ Your `gangs.yaml` topology persists in the mounted `/data` volume.
 ### npx / npm
 
 ```bash
-npx zwave-associations                 # starts the web UI on :8090
+npx zwave-orchestrator                 # starts the web UI on :8090
 # or install and use the CLI:
-#   npm i -g zwave-associations && zwave-assoc plan
+#   npm i -g zwave-orchestrator && zorc plan
 ```
 
 ### From source (development)

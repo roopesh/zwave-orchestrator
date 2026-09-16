@@ -1,9 +1,9 @@
 # Copy to docker-compose.yml and set ZWS_HOST to your Home Assistant / zwave-js-server host.
 #   docker compose up -d   ->   http://localhost:8090
 services:
-  zwave-associations:
+  zwave-orchestrator:
     build: .
-    # image: ghcr.io/OWNER/zwave-associations:latest  # once published
+    # image: ghcr.io/roopesh/zwave-orchestrator:latest  # once published
     ports:
       - "8090:8090"
     environment:

@@ -44,7 +44,7 @@ async function main(): Promise<void> {
       default:
         process.stderr.write(
           `Unknown command: ${command}\n` +
-            `Usage: zwave-assoc <dump|plan|apply|reconcile|teardown> [--file gangs.yaml] [--gang NAME] [--node ID] [--yes]\n` +
+            `Usage: zorc <dump|plan|apply|reconcile|teardown> [--file gangs.yaml] [--gang NAME] [--node ID] [--yes]\n` +
             `                                                        [--host H] [--port P] [--url ws://host:port]\n`,
         );
         process.exitCode = 2;

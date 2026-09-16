@@ -47,7 +47,7 @@ Tracked, not yet started. Ordered roughly by priority within each section.
 - ~~Server had zero request logging (only startup banners).~~ **DONE**: every mutating endpoint
   (apply/teardown/reconcile/redeploy/params-apply/save-gangs/save-policies/remap) now logs
   computed-vs-filtered action counts + a per-action OK/FAIL line with the real error, to
-  `~/Library/Logs/zwave-associations.log`. Per-node association-read failures log a WARN
+  `~/Library/Logs/zwave-orchestrator.log`. Per-node association-read failures log a WARN
   instead of silently defaulting to "no associations." Browser console gets the full response
   + explicit failed-entry list on every write.
 - ~~Gang "Delete" only edited config, never touched the devices; standalone "Teardown" button
@@ -109,13 +109,13 @@ codes) to test against before calling it generalized.
   (`/data/options.json`) and persists `codes.yaml` in `/data`. `hassio-addon/` (config.yaml +
   DOCS.md) + `repository.yaml` package it; `docker-publish` now builds multi-arch (amd64/arm64/
   armv7).
-- **TODO (user):** replace `OWNER`, push a tag to build/publish the GHCR image, make it public,
+- **TODO (user):** replace `roopesh`, push a tag to build/publish the GHCR image, make it public,
   then add the repo in HA (Add-on Store → Repositories) and install. Ingress can only be fully
   validated inside HA — the standalone app is verified.
 
 ## Publishing (needs the user's accounts — not code work)
 
-- Create the GitHub repo, push, replace `OWNER` in `package.json`, `hassio-addon/config.yaml`,
+- Create the GitHub repo, push, replace `roopesh` in `package.json`, `hassio-addon/config.yaml`,
   and `repository.yaml`.
 - Set `NPM_TOKEN` repo secret if publishing to npm.
 - Cut a tagged release once the above is done (triggers the Docker/npm workflows already in
